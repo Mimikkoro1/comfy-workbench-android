@@ -1,0 +1,63 @@
+{
+  "1": {
+    "inputs": {
+      "task": "more_detailed_caption",
+      "seed": 1031366672835313,
+      "max_new_tokens": 1024,
+      "num_beams": 3,
+      "do_sample": true,
+      "keep_model_loaded": true,
+      "model": [
+        "2",
+        0
+      ],
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "Florence2DescribeImage|Mie",
+    "_meta": {
+      "title": "Florence2 Describe Image 🐑"
+    }
+  },
+  "2": {
+    "inputs": {
+      "model_name": "MiaoshouAI/Florence-2-base-PromptGen-v2.0",
+      "precision": "fp16",
+      "attention": "sdpa"
+    },
+    "class_type": "Florence2ModelLoader|Mie",
+    "_meta": {
+      "title": "Florence2 Model Loader 🐑"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "Knitted-cat.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "4": {
+    "inputs": {
+      "anything": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ShowAnything|Mie",
+    "_meta": {
+      "title": "Show Anything 🐑"
+    }
+  },
+  "5": {
+    "inputs": {},
+    "class_type": "AboutAuthorNode|Mie",
+    "_meta": {
+      "title": "About Author 🐑"
+    }
+  }
+}

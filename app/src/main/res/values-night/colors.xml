@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DarkBg. Amoled black and dynamic color are applied in Compose, not here. -->
+    <color name="window_bg">#0E1116</color>
+</resources>

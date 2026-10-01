@@ -1,0 +1,16 @@
+.gradle/
+build/
+app/build/
+local.properties
+keystore.properties
+*.jks
+*.keystore
+.idea/
+*.iml
+.cxx/
+captures/
+_grok_logs/
+_emu/
+keystore/
+.kotlin/
+.pytest_cache/

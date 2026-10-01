@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Locale recreate uses these; a fade would show the black window behind. -->
+    <style name="Animation.Krea.NoWindow" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/no_window</item>
+        <item name="android:activityOpenExitAnimation">@anim/no_window</item>
+        <item name="android:activityCloseEnterAnimation">@anim/no_window</item>
+        <item name="android:activityCloseExitAnimation">@anim/no_window</item>
+    </style>
+
+    <style name="Theme.KreaWorkbench" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_bg</item>
+        <item name="android:colorBackground">@color/window_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/window_bg</item>
+        <item name="android:windowAnimationStyle">@style/Animation.Krea.NoWindow</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
