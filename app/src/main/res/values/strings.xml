@@ -420,4 +420,8 @@
         <item quantity="one">\u0020· %d more</item>
         <item quantity="other">\u0020· %d more</item>
     </plurals>
+    <plurals name="draw_pool_count">
+        <item quantity="one">%1$d card available</item>
+        <item quantity="other">%1$d cards available</item>
+    </plurals>
 </resources>

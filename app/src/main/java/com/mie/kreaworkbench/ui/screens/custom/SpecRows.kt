@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
@@ -124,6 +125,18 @@ fun SpecRow(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = scheme.primary,
+                        )
+                    }
+                    // 备选数小字（round11）：该槽实际生效筛选下的池大小——prompt_pool 槽=共享筛选后，
+                    // text 槽=全库（与抽卡按槽型分流一致）；不含被冷却冻结的卡，数字不随抽卡跳动。
+                    // null=尚未算出，不显示避免闪 0。与 help 行同风格（11sp / onSurfaceVariant）
+                    val poolSize = (if (type == "prompt_pool") vm.drawPoolSize else vm.libraryPoolSize).collectAsState()
+                    poolSize.value?.let { n ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            pluralStringResource(R.plurals.draw_pool_count, n, n),
+                            fontSize = 11.sp,
+                            color = scheme.onSurfaceVariant,
                         )
                     }
                 }

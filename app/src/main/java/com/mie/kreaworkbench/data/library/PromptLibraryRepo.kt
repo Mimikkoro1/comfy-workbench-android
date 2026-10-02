@@ -76,6 +76,7 @@ sealed class SaveTxtResult {
  * 本地提示词库仓库：多库并存，取代原 8199 工作台的 library_meta / library_prompt。
  * 库文件：filesDir/libraries/<libId>.json，标准 JSON 数组 [{id,prompt,title,category,tags}]。
  * 索引：filesDir/libraries/index.json，{"libraries":[...], "current": <libId|null>}。
+ * 冷却记忆（round11）：filesDir/libraries/<libId>.cooldown.json，{"texts":[…最近抽中的提示词文本，MRU 序]}。
  * 所有读写走单把互斥锁；meta()/draw() 用内存缓存，不重复读文件。
  */
 class PromptLibraryRepo(private val ctx: Context) {
@@ -92,6 +93,9 @@ class PromptLibraryRepo(private val ctx: Context) {
     private var loaded = false
     private var cachedEntries: List<PromptEntry> = emptyList()
     private var cachedForId: String? = null
+
+    /** 冷却记忆（round11）：libId → 最近抽中的提示词文本（MRU 序，首位最近）；首次用到才从文件加载。 */
+    private val cooldowns = HashMap<String, ArrayDeque<String>>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -137,25 +141,19 @@ class PromptLibraryRepo(private val ctx: Context) {
 
     /**
      * 抽卡：分类过滤（空/「全部」=不限，忽略大小写）→ 包含关键词（prompt/title/tags 任一命中，需全部命中）
-     * → 排除关键词（任一命中即排除）→ 剩余池随机一条。池空抛 ApiException。
+     * → 排除关键词（任一命中即排除）→ 冷却窗口（round11）→ 剩余候选随机一条。筛选后池空抛 ApiException。
+     * 冷却窗口：筛选后池 > 20 时把最近抽中的文本按 MRU 序从候选排除（先与当前池取交集——切库、删卡、
+     * 改筛选后不在池里的记忆自然失效）；每条先算排除结果、为空（该文案是最后剩余候选）就跳过，保底剩 1 张；
+     * 池 ≤ 20 不冻结、全池随机。两种情况记忆都照常记录。返回 JSON 结构不变：pool_size 仍是筛选后池大小，不含冻结。
      */
     suspend fun draw(category: String, include: String, exclude: String): JSONObject = locked {
         ensureLoadedLocked()
-        if (_currentId.value == null) throw ApiException(ctx.str(R.string.err_need_library), network = false)
-        var pool = cachedEntries
+        val libId = _currentId.value
+        if (libId == null) throw ApiException(ctx.str(R.string.err_need_library), network = false)
         val cat = category.trim()
-        if (cat.isNotEmpty() && cat != "全部") {
-            val c = cat.lowercase()
-            pool = pool.filter { it.category.lowercase() == c }
-        }
         val want = splitKeywords(include)
         val ban = splitKeywords(exclude)
-        if (want.isNotEmpty()) {
-            pool = pool.filter { e -> want.all { w -> e.matches(w) } }
-        }
-        if (ban.isNotEmpty()) {
-            pool = pool.filterNot { e -> ban.any { b -> e.matches(b) } }
-        }
+        val pool = filterPool(cat, want, ban)
         if (pool.isEmpty()) {
             val sep = ctx.str(R.string.list_sep)
             val detail = buildList {
@@ -170,11 +168,30 @@ class PromptLibraryRepo(private val ctx: Context) {
             }
             throw ApiException(message, network = false)
         }
-        val card = pool.random()
+        var candidates = pool
+        if (pool.size > COOLDOWN_MAX) {
+            for (text in cooldownLocked(libId)) {
+                // 保底后置（round11 fix）：filterNot 一次排掉所有同文案条目，
+                // 先算结果、为空（该文案是最后剩余候选）就跳过排除它，绝不把候选清空
+                val next = candidates.filterNot { it.prompt == text }
+                if (next.isNotEmpty()) candidates = next
+            }
+        }
+        val card = candidates.random()
+        rememberDrawLocked(libId, card.prompt)
         JSONObject()
             .put("prompt", card.prompt)
             .put("card", JSONObject().put("title", card.title).put("category", card.category))
             .put("pool_size", pool.size)
+    }
+
+    /**
+     * 备选数（round11）：与 draw 同一过滤管线，返回筛选后池的条数。
+     * 纯只读：无库/空池返回 0 不抛异常，不记录冷却记忆、不改任何状态。
+     */
+    suspend fun poolSize(category: String, include: String, exclude: String): Int = locked {
+        ensureLoadedLocked()
+        filterPool(category.trim(), splitKeywords(include), splitKeywords(exclude)).size
     }
 
     /** 设为当前库。 */
@@ -195,6 +212,8 @@ class PromptLibraryRepo(private val ctx: Context) {
         val libs = _libraries.value.filterNot { it.id == id }
         if (libs.size == _libraries.value.size) return@locked
         File(dir, "$id.json").delete()
+        File(dir, "$id.cooldown.json").delete()
+        cooldowns.remove(id)
         val cur = if (_currentId.value == id) libs.maxByOrNull { it.importedAt }?.id else _currentId.value
         writeIndexLocked(libs, cur)
         _libraries.value = libs
@@ -484,6 +503,53 @@ class PromptLibraryRepo(private val ctx: Context) {
         cachedForId = id
     }
 
+    /** 抽卡过滤管线（draw 与 poolSize 共用）：分类 → 包含 → 排除。只过滤不判空，池空由调用方处理。 */
+    private fun filterPool(cat: String, want: List<String>, ban: List<String>): List<PromptEntry> {
+        var pool = cachedEntries
+        if (cat.isNotEmpty() && cat != "全部") {
+            val c = cat.lowercase()
+            pool = pool.filter { it.category.lowercase() == c }
+        }
+        if (want.isNotEmpty()) {
+            pool = pool.filter { e -> want.all { w -> e.matches(w) } }
+        }
+        if (ban.isNotEmpty()) {
+            pool = pool.filterNot { e -> ban.any { b -> e.matches(b) } }
+        }
+        return pool
+    }
+
+    /** 读某库的冷却记忆：首次访问从 <libId>.cooldown.json 惰性加载，缺失/损坏当空。必须在锁内调用。 */
+    private fun cooldownLocked(libId: String): ArrayDeque<String> =
+        cooldowns.getOrPut(libId) {
+            val dq = ArrayDeque<String>()
+            try {
+                val arr = JSONObject(File(dir, "$libId.cooldown.json").readText()).optJSONArray("texts") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i)
+                    if (s.isNotEmpty()) dq.addLast(s)
+                }
+            } catch (_: Exception) {
+            }
+            dq
+        }
+
+    /** 抽中一条：文本记入 MRU 头部（同文本先移除再置顶）、裁到上限、整文件重写。必须在锁内调用。 */
+    private fun rememberDrawLocked(libId: String, prompt: String) {
+        val dq = cooldownLocked(libId)
+        dq.remove(prompt)
+        dq.addFirst(prompt)
+        while (dq.size > COOLDOWN_MAX) dq.removeLast()
+        try {
+            val arr = JSONArray()
+            for (s in dq) arr.put(s)
+            dir.mkdirs()
+            File(dir, "$libId.cooldown.json").writeText(JSONObject().put("texts", arr).toString())
+        } catch (_: Exception) {
+            // 持久化失败只丢记忆，不影响本次抽卡（内存队列仍在，下次抽中会重写）
+        }
+    }
+
     /** 解析库文件为条目列表；文件缺失/损坏返回 null。纯读取，不触碰抽卡缓存。 */
     private fun parseLibFile(libId: String): List<PromptEntry>? {
         val f = File(dir, "$libId.json")
@@ -737,6 +803,8 @@ class PromptLibraryRepo(private val ctx: Context) {
         const val UNCAT = "未分类"
         const val MAX_BYTES = 20L * 1024 * 1024
         const val MAX_PROMPT_CHARS = 10_000
+        /** 冷却窗口（round11）：每库最多记住最近 20 条文本；筛选后池 > 20 时冻结（排除记忆里的文本，保底剩 1 张）。 */
+        const val COOLDOWN_MAX = 20
         /** 编辑器容量护栏（round8 2.3）：库文件超过 1MB 不给编辑，Compose 大文本会卡。 */
         const val EDITOR_MAX_BYTES = 1L * 1024 * 1024
     }

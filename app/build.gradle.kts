@@ -20,8 +20,8 @@ android {
         applicationId = "com.mie.kreaworkbench.direct"
         minSdk = 26
         targetSdk = 37
-        versionCode = 49
-        versionName = "0.1.0"
+        versionCode = 51
+        versionName = "0.1.1"
     }
 
     signingConfigs {

@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mie.kreaworkbench.KreaApp
@@ -53,6 +54,23 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         c.library.currentId,
     ) { libs, cur -> (libs.firstOrNull { it.id == cur }?.count ?: 0) > 0 }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 备选数小字（round11）：prompt_pool 槽 = 共享筛选后的池大小。触发源为库列表（增删条目 count 变）、
+     *  当前库、共享筛选三项；不含被冷却冻结的卡，数字不随抽卡跳动（触发源里没有抽卡动作）。
+     *  null=尚未算出，UI 不显示避免闪 0。 */
+    val drawPoolSize: StateFlow<Int?> = combine(
+        c.library.libraries,
+        c.library.currentId,
+        snapshotFlow { listOf(drawCat, drawInc, drawExc) },
+    ) { _, _, filter -> c.library.poolSize(filter[0], filter[1], filter[2]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** 全库备选数（round11）：text 槽小字用，不带筛选——与 text 槽抽卡传空筛选的分流行为一致。 */
+    val libraryPoolSize: StateFlow<Int?> = combine(
+        c.library.libraries,
+        c.library.currentId,
+    ) { _, _ -> c.library.poolSize("", "", "") }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     var loading by mutableStateOf(true)
         private set
@@ -438,8 +456,14 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             drawingKey = key
             message = ""
             try {
-                val json = c.library.draw(drawCat, drawInc, drawExc)
-                val maxChars = specs.firstOrNull { Specs.key(it) == key }?.let { Specs.maxChars(it) } ?: 2000
+                // 按槽型分流筛选参数（round11 冲突澄清，裁决 A）：prompt_pool 槽带共享筛选，text 槽不带（全库）
+                val spec = specs.firstOrNull { Specs.key(it) == key }
+                val json = if (spec != null && Specs.type(spec) == "prompt_pool") {
+                    c.library.draw(drawCat, drawInc, drawExc)
+                } else {
+                    c.library.draw("", "", "")
+                }
+                val maxChars = spec?.let { Specs.maxChars(it) } ?: 2000
                 setText(key, json.optString("prompt"), maxChars)
                 persist()
             } catch (e: Exception) {

@@ -420,4 +420,8 @@
         <item quantity="one">\u0020· 还有 %d 个</item>
         <item quantity="other">\u0020· 还有 %d 个</item>
     </plurals>
+    <plurals name="draw_pool_count">
+        <item quantity="one">当前备选 %1$d 张</item>
+        <item quantity="other">当前备选 %1$d 张</item>
+    </plurals>
 </resources>
