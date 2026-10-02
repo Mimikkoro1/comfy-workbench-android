@@ -95,6 +95,7 @@
     <string name="ping_latency">%1$s · %2$d ms latency</string>
     <string name="ping_timeout">Connection test timed out (65s). Try again.</string>
     <string name="about_unreleased">Unreleased</string>
+    <string name="about_gpl_note">Free and open source under GPL-3.0</string>
     <string name="about_version">Version</string>
     <string name="about_system">System</string>
     <string name="cache_title">Cache</string>

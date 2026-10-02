@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,8 +38,8 @@ import com.mie.kreaworkbench.ui.components.LargeBarScaffold
  * 关于页链接。留空表示尚未发布：行内显示「待发布」，点击不跳转。
  * 填上 http 或 https 地址后，显示该地址并点击打开。
  */
-const val ABOUT_GITHUB_URL = ""
-const val ABOUT_LICENSE_URL = ""
+const val ABOUT_GITHUB_URL = "https://github.com/Mimikkoro1/comfy-workbench-android"
+const val ABOUT_LICENSE_URL = "https://github.com/Mimikkoro1/comfy-workbench-android/blob/main/LICENSE"
 
 /** http(s) 才可打开；空字符串和其它占位都不跳转。 */
 internal fun aboutOpenUrl(raw: String): String? {
@@ -108,6 +109,14 @@ fun AboutScreen(onBack: () -> Unit) {
                     },
                 )
             }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.about_gpl_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
             Spacer(Modifier.height(16.dp))
             CardGroup {
                 AboutLinkRow(index = 0, count = 2, title = "Github", url = ABOUT_GITHUB_URL)

@@ -21,10 +21,9 @@
 
 ## 截图
 
-<!-- TODO(发布前):从模拟器/真机截取 4-6 张,放入 docs/screenshots/,替换下面的占位 -->
-| 生成 | 画廊 | 提示词库 | 设置 |
+| 生成 | 画廊 | 工作流/库 | 设置 |
 | --- | --- | --- | --- |
-| (待补) | (待补) | (待补) | (待补) |
+| <img src="docs/screenshots/generate_zh.png" width="216"/> | <img src="docs/screenshots/gallery_zh.png" width="216"/> | <img src="docs/screenshots/library_zh.png" width="216"/> | <img src="docs/screenshots/settings_zh.png" width="216"/> |
 
 ## 快速开始
 
@@ -94,6 +93,12 @@ gradlew.bat assembleRelease
 - Chinese and English UI: follows the system language by default, switchable in Settings
 - Example API-format workflows live in `docs/example-workflows/`
 - Designed for LAN use; for remote access pair it with Tailscale / frp (traffic is plain HTTP, use a tunnel on untrusted networks)
+
+### Screenshots
+
+| Generate | Gallery | Workflows / Library | Settings |
+| --- | --- | --- | --- |
+| <img src="docs/screenshots/generate_en.png" width="216"/> | <img src="docs/screenshots/gallery_en.png" width="216"/> | <img src="docs/screenshots/library_en.png" width="216"/> | <img src="docs/screenshots/settings_en.png" width="216"/> |
 
 Build: JDK 17 + Android SDK, then `./gradlew assembleRelease`. See the Chinese sections above for full details.
 

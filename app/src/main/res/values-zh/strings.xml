@@ -95,6 +95,7 @@
     <string name="ping_latency">%1$s · 延迟 %2$d ms</string>
     <string name="ping_timeout">连接测试超时（65 秒），请稍后重试</string>
     <string name="about_unreleased">待发布</string>
+    <string name="about_gpl_note">本应用基于 GPL-3.0 协议免费开源</string>
     <string name="about_version">版本</string>
     <string name="about_system">系统</string>
     <string name="cache_title">缓存管理</string>
