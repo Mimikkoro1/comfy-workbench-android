@@ -1,0 +1,74 @@
+name: Bug 反馈 / Bug report
+description: 报告连接失败、生成异常等问题 / Report connection failures, generation issues, etc.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈!「连不上服务器」类问题九成出在下面第 2、3、4 项,请务必填写。
+        Thanks for reporting! For connection issues, items 2–4 below are almost always the cause — please fill them in.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述 / What happened?
+      description: 期望的行为与实际的表现 / Expected behavior vs actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: comfyui-command
+    attributes:
+      label: ComfyUI 启动命令 / ComfyUI launch command
+      description: 实际使用的启动命令。直连需要 `--listen` 监听 0.0.0.0,仅监听 127.0.0.1 时手机无法访问 / The actual command. Direct connection requires `--listen` on 0.0.0.0; 127.0.0.1-only is unreachable from the phone
+      placeholder: python main.py --listen 0.0.0.0 --port 8188
+    validations:
+      required: true
+  - type: dropdown
+    id: browser-check
+    attributes:
+      label: 手机浏览器能否打开 http://<服务器IP>:8188 ? / Can the phone's browser open http://<server-ip>:8188 ?
+      description: 这是判断网络是否打通的关键一步 / This is the key check for network reachability
+      options:
+        - 能,能看到 ComfyUI 界面 / Yes, ComfyUI loads
+        - 不能 / No
+        - 没试过 / Not tried
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: 手机与 ComfyUI 服务器的网络关系 / Network between phone and ComfyUI server
+      options:
+        - 同一局域网(Wi-Fi)/ Same LAN (Wi-Fi)
+        - Tailscale 等虚拟组网 / Virtual network (Tailscale, etc.)
+        - 公网端口转发 / Public port forwarding
+        - 不确定 / Not sure
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本 / App version
+      description: 见「设置 → 关于」/ See Settings → About
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: android-version
+    attributes:
+      label: 手机型号与 Android 版本 / Phone model and Android version
+      placeholder: e.g. Pixel 8, Android 15
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 使用的工具流 JSON(可选)/ Workflow JSON (optional)
+      description: 出问题时导入的 API 格式 JSON,可直接粘贴或附上文件 / Paste or attach the API-format JSON you imported
+    validations:
+      required: false
+  - type: textarea
+    id: logs-screenshots
+    attributes:
+      label: 截图或日志(可选)/ Screenshots or logs (optional)
+    validations:
+      required: false

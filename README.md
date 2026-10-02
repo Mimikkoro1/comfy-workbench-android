@@ -27,6 +27,8 @@
 
 ## 快速开始
 
+> 系统要求:Android 8.0 及以上;Release APK 为 arm64-v8a / armeabi-v7a / x86 / x86_64 通用包。
+
 1. 准备一台跑着 ComfyUI 的机器(PC / 服务器均可)
 2. 手机和它**处于同一网络**,或通过下文的远程访问方式打通
 3. 安装 APK(见右侧 Releases),首次打开填入 ComfyUI 地址,例如 `http://192.168.1.100:8188`
@@ -89,6 +91,7 @@ gradlew.bat assembleRelease
 **Comfy Workbench** is a native Android (Kotlin + Jetpack Compose) client for your self-hosted ComfyUI server: text-to-image, image-to-image, image-to-video, a prompt library, and a gallery — all over direct HTTP + WebSocket, with no cloud service in between.
 
 - Import any API-format workflow JSON (examples for t2i / i2i / Wan2.2 i2v / Florence-2 image-to-prompt in `docs/example-workflows/`)
+- Requires Android 8.0+; the Release APK is a universal build (arm64-v8a / armeabi-v7a / x86 / x86_64)
 - Real-time progress, foreground-service background generation, queue & interrupt
 - Chinese and English UI: follows the system language by default, switchable in Settings
 - Example API-format workflows live in `docs/example-workflows/`
