@@ -90,12 +90,28 @@
     <string name="settings_blur_desc">Frosted top and bottom bars. Below Android 12, a translucent bar is used.</string>
     <string name="settings_notifications">Notifications</string>
     <string name="settings_notify_done">Generation complete</string>
+    <string name="field_user">Username</string>
+    <string name="field_pass">Password</string>
+    <string name="show_password">Show password</string>
+    <string name="hide_password">Hide password</string>
+    <string name="auth_needed">Username and password required (401)</string>
+    <string name="server_history">Recent servers</string>
+    <string name="err_auth_failed">Wrong username or password (401)</string>
+    <string name="err_recover_stopped">Could not confirm the earlier submission on the server. Auto resubmit is disabled to avoid duplicate images — tap Retry to submit again.</string>
+    <string name="settings_battery">Background</string>
+    <string name="settings_battery_desc">Allow background running and battery-optimization exemption so tasks are less likely to be interrupted when the screen is locked or the app is in the background. If it still gets killed, allow this app to run in the background in your system battery settings.</string>
+    <string name="battery_status_on">Allowed</string>
+    <string name="battery_status_off">Not allowed — tap to enable</string>
+    <string name="action_battery_ignore">Ignore battery optimization</string>
+    <string name="battery_hint_title">Allow background downloads?</string>
+    <string name="battery_hint_body">To keep generating and downloading with the screen locked or the app in background, tap Allow to exempt this app from battery optimization. If it still gets killed, allow this app to run in the background in your system battery settings. You can skip this and enable it later in Settings.</string>
+    <string name="battery_hint_go">Allow</string>
+    <string name="battery_hint_later">Later</string>
     <string name="ping_need_server">Enter a server address</string>
     <string name="ping_connecting">Connecting…</string>
     <string name="ping_latency">%1$s · %2$d ms latency</string>
     <string name="ping_timeout">Connection test timed out (65s). Try again.</string>
     <string name="about_unreleased">Unreleased</string>
-    <string name="about_gpl_note">Free and open source under GPL-3.0</string>
     <string name="about_version">Version</string>
     <string name="about_system">System</string>
     <string name="cache_title">Cache</string>
@@ -197,12 +213,10 @@
     <string name="imported_at">Imported · %1$s</string>
     <string name="state_importing_long">Importing…</string>
     <string name="workflows_empty">No workflows yet. Tap Import workflow and choose a workflow + definition .json pair (or one API-format .json).</string>
-    <string name="workflows_hint">Tap an item to make it current. Generate and Models use the current workflow.</string>
     <string name="state_importing">Importing…</string>
     <string name="section_prompts">Prompt libraries</string>
     <string name="example_format">Example</string>
     <string name="prompts_empty">No prompt libraries yet. Tap Import and choose a .json or .txt file.</string>
-    <string name="prompts_hint">Tap a prompt library to make it current. Deleting the current one switches to the most recently imported prompt library.</string>
     <string name="delete_library_title">Delete prompt library</string>
     <string name="delete_library_body">Delete “%1$s” (%2$s)? This cannot be undone.</string>
     <string name="delete_workflow_title">Delete workflow</string>
@@ -281,8 +295,9 @@
     <string name="phase_submit_retry">Retrying submit · %1$s</string>
     <string name="phase_queued">Queued</string>
     <string name="phase_image_of">Image %1$d/%2$d</string>
-    <string name="phase_running_steps">Generating %1$s · step %2$d/%3$d</string>
-    <string name="phase_running">Generating %1$s</string>
+    <!-- round13 第 1 项：进度行改为「Generating · 段1 · 段2」拼接，旧的整句格式废弃 -->
+    <string name="phase_running_plain">Generating</string>
+    <string name="phase_step_of">%1$d/%2$d steps</string>
     <string name="phase_video_retry">Could not download the video. Tap to retry.</string>
     <string name="phase_downloading">Downloading %1$s</string>
     <string name="phase_done">Done</string>
@@ -371,7 +386,6 @@
     <string name="wf_upscale">Upscale model</string>
     <string name="wf_help_image">Upload the reference image for this run.</string>
     <string name="wf_help_video_unsupported">Video input is not supported in this version.</string>
-    <string name="wf_help_model">Models this workflow needs. On Generate you can switch to another installed model of the same type.</string>
     <string name="wf_help_seed">Random picks a new seed for each image. Fixed uses the number above.</string>
     <string name="wf_help_seed_old">Random gives each image its own seed. Otherwise the fixed number is used.</string>
     <string name="wf_help_size">Pick a preset size, or enter a custom size</string>
@@ -424,4 +438,33 @@
         <item quantity="one">%1$d card available</item>
         <item quantity="other">%1$d cards available</item>
     </plurals>
+
+    <!-- round13 -->
+    <string name="action_refresh">Refresh</string>
+    <string name="refresh_done">Refreshed</string>
+    <string name="refresh_failed">Refresh failed · %1$s</string>
+    <string name="choices_not_loaded">Options not loaded — your value is kept and editable</string>
+    <string name="value_not_in_list">Value not in the list</string>
+    <string name="rename_library">Rename prompt library</string>
+    <string name="rename_category">Rename group</string>
+    <string name="pick_category_rename">Pick a group to rename</string>
+    <string name="dup_name">Name already in use</string>
+    <string name="group_connection">ComfyUI server</string>
+    <string name="group_look">Appearance &amp; language</string>
+    <string name="group_storage">Storage &amp; cache</string>
+    <string name="group_about">About</string>
+    <string name="list_item_hint">Tap to make current, long-press for more</string>
+    <string name="status_not_set">Not set</string>
+    <string name="status_cache">Cache %1$s</string>
+    <!-- round14 -->
+    <string name="update_check">Check for updates</string>
+    <string name="update_checking">Checking…</string>
+    <string name="update_latest">You\'re on the latest version</string>
+    <string name="update_failed">Check failed: %1$s</string>
+    <string name="update_title">New version v%1$s</string>
+    <string name="update_download">Download</string>
+    <string name="update_ignore">Skip this version</string>
+    <string name="update_later">Later</string>
+    <string name="update_no_notes">(No release notes)</string>
+    <string name="about_gpl_note">Free and open source under GPL-3.0</string>
 </resources>

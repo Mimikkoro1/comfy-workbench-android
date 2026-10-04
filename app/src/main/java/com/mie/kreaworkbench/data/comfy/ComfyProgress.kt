@@ -8,6 +8,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -25,13 +26,14 @@ import java.util.concurrent.atomic.AtomicLong
  * 0.29.0 源码确认：progress/executing/execution_* 只发给「正在执行的 prompt 的提交 client_id」，
  * 所以这里的 clientId 必须和提交 /prompt 时用的 client_id 相同（都用 settings.comfyClientId()）。
  */
-class ComfyProgress(private val settings: SettingsStore) {
+class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Interceptor? = null) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = OkHttpClient.Builder()
         .proxy(java.net.Proxy.NO_PROXY)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .apply { if (auth != null) addInterceptor(auth) }
         .build()
 
     private val lock = Any()
@@ -122,6 +124,7 @@ class ComfyProgress(private val settings: SettingsStore) {
         private fun stale(): Boolean = gen != generation.get()
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            android.util.Log.i("KreaWs", "ws open gen=$gen")
             if (stale()) return
             backoffIdx.set(0)
         }
@@ -145,6 +148,8 @@ class ComfyProgress(private val settings: SettingsStore) {
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // 连接失败留一条日志（401/断网排障用）；重连节奏由 loop 的退避表管
+            android.util.Log.w("KreaWs", "ws fail gen=$gen code=${response?.code}", t)
             if (stale()) return
             socketGone.set(true)
         }
@@ -192,14 +197,19 @@ class ComfyProgress(private val settings: SettingsStore) {
         }
     }
 
-    private suspend fun wsUrl(): String {
-        val base = settings.baseUrl()
-        val wsBase = when {
-            base.startsWith("https://") -> "wss://" + base.removePrefix("https://")
-            base.startsWith("http://") -> "ws://" + base.removePrefix("http://")
-            else -> "ws://" + base
+    /** 返回 null = 地址未配置或非法（loop 会安静退出/断开，绝不因畸形 URL 炸掉 scope）。
+     *  注意校验只能对 http(s) 做：OkHttp 的 HttpUrl 不认 ws/wss scheme，直接对完整 ws://
+     *  地址 toHttpUrlOrNull() 恒为 null——旧代码正是这么写的，导致 WS 从未真正连接、
+     *  步数进度（progress 消息）一直为空（round13 第 1 项的隐藏根因）。 */
+    private suspend fun wsUrl(): String? {
+        val base = try {
+            settings.baseUrl()
+        } catch (_: Exception) {
+            return null
         }
-        return "$wsBase/ws?clientId=${settings.comfyClientId()}"
+        val httpish = base.toHttpUrlOrNull() ?: return null
+        val scheme = if (httpish.isHttps) "wss" else "ws"
+        return "$scheme://${httpish.host}:${httpish.port}/ws?clientId=${settings.comfyClientId()}"
     }
 
     private companion object {

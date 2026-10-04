@@ -15,6 +15,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,10 +33,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.RefreshCw
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.KreaCard
-import com.mie.kreaworkbench.ui.components.LargeBarScaffold
+import com.mie.kreaworkbench.ui.components.ScreenHeader
+import com.mie.kreaworkbench.ui.components.LocalToaster
+import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.nav.NavModel
 import com.mie.kreaworkbench.ui.screens.custom.CustomModel
@@ -47,6 +53,8 @@ import com.mie.kreaworkbench.data.workflows.Specs
  * 「模型和采样」页签 = 当前工作流的设置页：渲染 model/select/int/float/bool 五类 spec，
  * 与生成页（CustomScreen）共用同一个 CustomModel 实例和数据（viewModel() Activity 作用域）。
  * 没有保存按钮：改动即 300ms 防抖自动落盘 last_values.json（复用表单 VM 的 persist/persistNow）。
+ * 顶部「刷新」（round13 第 7 项）：清模型目录缓存重拉 /object_info + 本页全部下拉选项，
+ * 等价于 PC 浏览器对 ComfyUI 按 Ctrl+R 后重开参数面板；已填参数值保留，失败保留旧数据。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -56,14 +64,39 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
     LaunchedEffect(wf) { if (wf.isNotBlank()) vm.bind(wf) }
     var confirmRestore by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
+    val toaster = LocalToaster.current
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val currentName = if (vm.displayName.isBlank()) "…" else knownText(vm.displayName)
-    LargeBarScaffold(title = stringResource(R.string.title_models)) { padding ->
+    // r13fix2：与生成/工作流/设置三个 tab 一样用 ScreenHeader 渲染主标题（不再用 LargeBarScaffold，
+    // 其 LargeFlexibleTopAppBar 顶部固有一行 64dp 小栏，会把大标题整体往下压），刷新按钮放在同一行右侧
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(stringResource(R.string.title_models), actions = {
+            IconButton(
+                onClick = {
+                    if (!vm.refreshing) {
+                        vm.refreshAll { err ->
+                            if (err == null) {
+                                notify(toaster, context, context.getString(R.string.refresh_done))
+                            } else {
+                                notify(toaster, context, context.getString(R.string.refresh_failed, err))
+                            }
+                        }
+                    }
+                },
+                enabled = !vm.refreshing,
+            ) {
+                if (vm.refreshing) {
+                    ContainedLoadingIndicator(Modifier.size(24.dp))
+                } else {
+                    Icon(Lucide.RefreshCw, contentDescription = stringResource(R.string.action_refresh), tint = scheme.primary)
+                }
+            }
+        })
         Column(
             Modifier
-                .fillMaxSize()
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(padding)
                 .padding(horizontal = 12.dp),
         ) {
             if (wf.isBlank()) {

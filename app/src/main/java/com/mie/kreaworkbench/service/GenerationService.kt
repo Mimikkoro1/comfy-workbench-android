@@ -43,7 +43,7 @@ class GenerationService : Service() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "krea:gen").apply {
             setReferenceCounted(false)
-            acquire(40 * 60 * 1000L)
+            acquire(10 * 60 * 1000L)
         }
         scope.launch {
             engine.snapshot.collect { jobs ->
@@ -64,7 +64,7 @@ class GenerationService : Service() {
                 val busy = engine.hasActive() || engine.hasUnfinished()
                 if (busy) {
                     try {
-                        wake?.acquire(40 * 60 * 1000L)
+                        wake?.acquire(10 * 60 * 1000L)
                     } catch (_: Exception) {
                     }
                     engine.reconcileActive()

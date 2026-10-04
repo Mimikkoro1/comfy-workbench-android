@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -34,9 +34,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.Check
@@ -130,7 +132,8 @@ private fun ChoiceSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        // 长列表先半屏展开，可上拉到接近全屏；短列表内容多高就多高（不再硬卡 480dp）
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
     ) {
         Text(
             title,
@@ -138,7 +141,7 @@ private fun ChoiceSheet(
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
         )
-        LazyColumn(Modifier.heightIn(max = 480.dp).navigationBarsPadding()) {
+        LazyColumn(Modifier.navigationBarsPadding()) {
             itemsIndexed(options, key = { index, item -> "$index-$item" }) { index, item ->
                 ListItem(
                     headlineContent = {
@@ -154,6 +157,48 @@ private fun ChoiceSheet(
             }
         }
     }
+}
+
+/**
+ * 与 CompactMenuField 同款外观的单行输入框（40dp 高、12dp 圆角、surfaceBright 底 + 细描边、labelMedium），
+ * 设置页 int/float 及选项拉取失败时的退化输入框用，和下拉框视觉对齐。
+ */
+@Composable
+fun CompactTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(12.dp)
+    var focused by remember { mutableStateOf(false) }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.labelMedium.copy(color = scheme.onSurface),
+        cursorBrush = SolidColor(scheme.primary),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        modifier = modifier.height(40.dp).onFocusChanged { focused = it.isFocused },
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+                    .background(scheme.surfaceBright)
+                    .border(
+                        1.dp,
+                        if (focused) scheme.primary else scheme.outlineVariant.copy(alpha = 0.5f),
+                        shape,
+                    )
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                inner()
+            }
+        },
+    )
 }
 
 @Composable

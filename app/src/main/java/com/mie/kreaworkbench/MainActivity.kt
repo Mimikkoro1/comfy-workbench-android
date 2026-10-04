@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.chrisbanes.haze.rememberHazeState
@@ -33,6 +34,7 @@ import com.mie.kreaworkbench.ui.theme.KreaTheme
 @OptIn(ExperimentalSharedTransitionApi::class)
 class MainActivity : AppCompatActivity() {
     private var debugBack: android.content.BroadcastReceiver? = null
+    private val showBatteryHint = androidx.compose.runtime.mutableStateOf(false)
 
     override fun attachBaseContext(newBase: android.content.Context) {
         super.attachBaseContext(AppLocale.wrap(newBase))
@@ -83,6 +85,17 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val pending = c.db.needsWork().isNotEmpty()
             if (pending) withContext(Dispatchers.Main) { startGenerationService(this@MainActivity) }
+            // vivo 后台保活引导（v0.5 §3）：第一次出现后台任务且还没忽略电池优化时，
+            // 给说明再跳转，只弹一次、不强制
+            if (pending && !com.mie.kreaworkbench.util.BatteryKeep.isIgnoring(this@MainActivity)) {
+                try {
+                    if (!c.settings.current().batteryHintShown) {
+                        c.settings.update { it.copy(batteryHintShown = true) }
+                        withContext(Dispatchers.Main) { showBatteryHint.value = true }
+                    }
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -96,6 +109,8 @@ class MainActivity : AppCompatActivity() {
             val settings by app.container.settings.flow.collectAsState(initial = UserSettings())
             KreaTheme(settings.themeMode, settings.dynamicColor, settings.amoled) {
                 val nav: NavModel = viewModel()
+                // round14：GitHub 新版本对话框（自动检查或关于页手动检查后弹；独立窗口，放哪都行）
+                com.mie.kreaworkbench.ui.components.UpdateDialog()
                 val haze = rememberHazeState()
                 val blur = settings.blurEnabled && Build.VERSION.SDK_INT >= 31
                 CompositionLocalProvider(
@@ -113,6 +128,29 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            if (showBatteryHint.value) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showBatteryHint.value = false },
+                title = { androidx.compose.material3.Text(stringResource(com.mie.kreaworkbench.R.string.battery_hint_title)) },
+                text = { androidx.compose.material3.Text(stringResource(com.mie.kreaworkbench.R.string.battery_hint_body)) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        showBatteryHint.value = false
+                        com.mie.kreaworkbench.util.BatteryKeep.requestIgnore(this)
+                    }) { androidx.compose.material3.Text(stringResource(com.mie.kreaworkbench.R.string.battery_hint_go)) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { showBatteryHint.value = false }) {
+                        androidx.compose.material3.Text(stringResource(com.mie.kreaworkbench.R.string.battery_hint_later))
+                    }
+                },
+            )
+        }
+        }
+        // round14：启动自动检查更新（24h 一次、尊重忽略、失败静默）
+        lifecycleScope.launch {
+            com.mie.kreaworkbench.data.update.UpdateChecker.autoCheck((application as KreaApp).container.settings)
+                ?.let { com.mie.kreaworkbench.data.update.UpdateChecker.pending.value = it }
         }
     }
 }

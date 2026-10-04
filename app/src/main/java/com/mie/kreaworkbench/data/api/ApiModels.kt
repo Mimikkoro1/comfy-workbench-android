@@ -3,7 +3,14 @@ package com.mie.kreaworkbench.data.api
 import org.json.JSONArray
 import org.json.JSONObject
 
-class ApiException(message: String, val network: Boolean = false) : Exception(message)
+/** network=true 可自动重试；auth=true 是凭据问题（401），调用方应提示而非重试。
+ *  code 是 HTTP 状态码（非 HTTP 来源的异常为 0）：调用方据此区分 404（资源不存在）与其他失败。 */
+class ApiException(
+    message: String,
+    val network: Boolean = false,
+    val auth: Boolean = false,
+    val code: Int = 0,
+) : Exception(message)
 
 data class RemoteImage(
     val index: Int,

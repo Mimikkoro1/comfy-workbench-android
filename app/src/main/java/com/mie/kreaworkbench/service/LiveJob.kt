@@ -2,7 +2,9 @@ package com.mie.kreaworkbench.service
 
 import android.content.Context
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.ui.locale.isVideoStage
 import com.mie.kreaworkbench.ui.locale.knownStage
+import com.mie.kreaworkbench.ui.locale.parseSamplingStage
 import com.mie.kreaworkbench.ui.locale.qty
 import com.mie.kreaworkbench.ui.locale.str
 import java.util.Locale
@@ -49,17 +51,28 @@ fun LiveJob.line(context: Context): String = when (phase) {
         if (ahead > 0) context.qty(R.plurals.queued_ahead, ahead, ahead) else context.str(R.string.phase_queued)
     }
     "running" -> {
-        val idx = if (imageIndex > 0) imageIndex else (done + 1).coerceAtLeast(1)
-        // 有阶段文案（采样 1/2 / 合成视频）就不显示「第 x/y 张」——视频任务一段只出一个
-        val head = if (stage.isBlank()) {
-            context.str(R.string.phase_image_of, idx, total)
-        } else {
-            context.knownStage(stage)
+        // 生成中进度按优先级拼接，互不覆盖（round13 第 1 项）：
+        // ① 张数（第 x/y 张，仅批量 > 1）→ ② 步数（x/y 步）→ ③ 引擎阶段（采样器进度只在
+        // ≥2 个采样器时显示、永远放最后；单采样器的「采样 1/1」没有信息量，此前还会把
+        // 张数/步数整个盖掉）。视频合成阶段始终显示（视频任务一段只出一张，张数段自然为空）。
+        val segs = ArrayList<String>(3)
+        if (total > 1) {
+            val idx = if (imageIndex > 0) imageIndex else (done + 1).coerceAtLeast(1)
+            segs.add(context.str(R.string.phase_image_of, idx, total))
         }
-        if (stepMax > 0) {
-            context.str(R.string.phase_running_steps, head, step, stepMax)
-        } else {
-            context.str(R.string.phase_running, head)
+        if (stepMax > 0) segs.add(context.str(R.string.phase_step_of, step, stepMax))
+        val st = stage.trim()
+        when {
+            st.isBlank() -> {}
+            isVideoStage(st) -> segs.add(context.knownStage(st))
+            else -> parseSamplingStage(st)?.let { (k, n) ->
+                if (n > 1) segs.add(context.knownStage(st))
+            }
+        }
+        when {
+            segs.isEmpty() -> context.str(R.string.phase_running_plain)
+            // " · " 分隔与生成页参数摘要行（customSummary）一致
+            else -> context.str(R.string.phase_running_plain) + " · " + segs.joinToString(" · ")
         }
     }
     "downloading" ->

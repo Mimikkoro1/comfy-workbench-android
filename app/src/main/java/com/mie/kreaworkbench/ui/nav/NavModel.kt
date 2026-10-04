@@ -28,6 +28,11 @@ sealed interface Overlay {
 
     /** 设置页「关于」二级页。 */
     data object About : Overlay
+
+    /** 设置页二级页（round13 5.2）：连接 / 后台运行 / 外观与语言。 */
+    data object SettingsConnection : Overlay
+    data object SettingsBackground : Overlay
+    data object SettingsAppearance : Overlay
 }
 
 class NavModel(app: Application) : AndroidViewModel(app) {

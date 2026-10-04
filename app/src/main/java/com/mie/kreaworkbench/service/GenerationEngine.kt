@@ -29,6 +29,7 @@ import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.data.workflows.WorkflowStore
 import com.mie.kreaworkbench.ui.locale.qty
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.util.extFromContentType
 import com.mie.kreaworkbench.util.prepareUploadJpeg
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -66,6 +67,8 @@ class GenerationEngine(
     private val running = ConcurrentHashMap<String, Job>()
     private val live = ConcurrentHashMap<String, LiveJob>()
     private val stopFlag = ConcurrentHashMap.newKeySet<String>()
+    /** 用户手动点的重试/继续：允许 ComfyApi 在恢复失败后重新 POST /prompt（自动 reconcile 绝不放行）。 */
+    private val manualKicks = ConcurrentHashMap.newKeySet<String>()
     /** 满 10 秒后界面在问，原图上传仍在跑。进度回调据此保持 upload_ask，避免把对话框盖掉。 */
     private val uploadAskHold = ConcurrentHashMap.newKeySet<String>()
     private val originalUploads = ConcurrentHashMap<String, Job>()
@@ -110,12 +113,16 @@ class GenerationEngine(
         false
     }
 
-    fun kick(clientId: String) {
+    fun kick(clientId: String, manual: Boolean = false) {
         if (clientId.isBlank()) return
         if (running[clientId]?.isActive == true) return
+        if (manual) manualKicks.add(clientId) else manualKicks.remove(clientId)
         stopFlag.remove(clientId)
         running[clientId] = scope.launch { runJob(clientId) }
     }
+
+    /** 用户手动点「继续/重试」：和自动 kick 的区别是提交恢复失败后允许重新 POST /prompt。 */
+    fun resumeManual(clientId: String) = kick(clientId, manual = true)
 
     fun cancel(clientId: String) {
         scope.launch {
@@ -164,7 +171,7 @@ class GenerationEngine(
             put(liveOf(clientId, "submitting", prompt = promptOf(db.job(clientId) ?: row)))
             var serverId = db.job(clientId)?.jobId.orEmpty().ifBlank { row.jobId }
             if (serverId.isBlank()) {
-                serverId = submit(ready, clientId, deadline) ?: return
+                serverId = submit(ready, clientId, deadline, manualKicks.remove(clientId)) ?: return
             }
             poll(clientId, serverId, deadline)
         } catch (_: CancellationException) {
@@ -188,18 +195,19 @@ class GenerationEngine(
         return if (long) 120 * 60 * 1000L else 30 * 60 * 1000L
     }
 
-    /** 「视频下载失败，点击重试」：重启轮询协程（jobId 已记录，不会重新提交）。 */
+    /** 「视频下载失败，点击重试」：重启轮询协程（jobId 已记录，不会重新提交）。用户手动点，算 manual。 */
     fun retryDownload(clientId: String) {
         if (clientId.isBlank()) return
         scope.launch {
             running[clientId]?.cancelAndJoin()
-            kick(clientId)
+            kick(clientId, manual = true)
         }
     }
 
     private fun holdWake() {
+        // 10 分钟超时（v0.5 §3）：轮询循环和下载进度回调会不断续期；任务结束 finally 立刻释放
         try {
-            jobWake.acquire(40 * 60 * 1000L)
+            jobWake.acquire(10 * 60 * 1000L)
         } catch (_: Exception) {
         }
     }
@@ -212,13 +220,16 @@ class GenerationEngine(
         }
     }
 
-    private suspend fun submit(body: String, clientId: String, deadline: Long): String? {
+    private suspend fun submit(body: String, clientId: String, deadline: Long, manual: Boolean): String? {
         // 网络失败最多重试 NETWORK_RETRY_CAP_MS，且不超过任务 deadline。到点 pause，可恢复，不改 failed。
         val submitDeadline = minOf(deadline, System.currentTimeMillis() + NETWORK_RETRY_CAP_MS)
         while (System.currentTimeMillis() < submitDeadline) {
             if (clientId in stopFlag) return null
             try {
-                val job = api.submitJob(JSONObject(body))
+                // manual=true 表示这次提交是用户手动触发的：ComfyApi 据此允许在恢复失败后重新 POST /prompt
+                val payload = JSONObject(body)
+                if (manual) payload.put("manual_retry", true)
+                val job = api.submitJob(payload)
                 db.updateJob(clientId) {
                     it.copy(jobId = job.jobId, state = job.state, total = job.total, done = job.done)
                 }
@@ -358,28 +369,27 @@ class GenerationEngine(
                 } catch (_: Exception) {
                 }
             }
-            db.insertImage(
-                ImageRow(
-                    id = 0,
-                    jobId = job.jobId,
-                    clientJobId = clientId,
-                    idx = v.index,
-                    mode = job.mode,
-                    prompt = job.prompt,
-                    paramsJson = job.params.toString(),
-                    seed = v.seed,
-                    width = w,
-                    height = h,
-                    remoteFilename = v.filename,
-                    remoteSubfolder = v.subfolder,
-                    localPath = dest.absolutePath,
-                    sizeBytes = dest.length(),
-                    createdAt = System.currentTimeMillis(),
-                    savedToAlbum = false,
-                    albumUri = "",
-                    kind = "video",
-                ),
+            val videoRow = ImageRow(
+                id = 0,
+                jobId = job.jobId,
+                clientJobId = clientId,
+                idx = v.index,
+                mode = job.mode,
+                prompt = job.prompt,
+                paramsJson = job.params.toString(),
+                seed = v.seed,
+                width = w,
+                height = h,
+                remoteFilename = v.filename,
+                remoteSubfolder = v.subfolder,
+                localPath = dest.absolutePath,
+                sizeBytes = dest.length(),
+                createdAt = System.currentTimeMillis(),
+                savedToAlbum = false,
+                albumUri = "",
+                kind = "video",
             )
+            db.insertImage(videoRow)
             cache.enforce()
             revision.value = revision.value + 1
         }
@@ -391,11 +401,15 @@ class GenerationEngine(
             if (db.hasLocal(job.jobId, img.index)) continue
             if (db.isTombstoned(job.jobId, img.index, "image", img.filename, img.subfolder)) continue
             publishDownload(clientId, job, ByteProgress(0, 0, 0.0))
-            val dest = File(cache.imagesDir(), "${job.jobId}_${img.index}.png")
+            // 扩展名优先取 ComfyUI 返回的 filename 后缀（bug 修复：以前写死 .png）；
+            // 文件名没带后缀时先落占位名，下载完按响应 Content-Type 决定扩展名并改名
+            val extFromName = img.filename.substringAfterLast('.', "").lowercase()
+                .takeIf { it in IMAGE_EXTS }
+            var file = File(cache.imagesDir(), "${job.jobId}_${img.index}.${extFromName ?: "bin"}")
             val url = img.url.ifBlank { imageUrl(img.filename, img.subfolder, img.type) }
             try {
                 var lastUi = 0L
-                transfer.download(url, dest) { prog ->
+                val ctype = transfer.download(url, file) { prog ->
                     val now = System.currentTimeMillis()
                     val finished = prog.total > 0 && prog.done >= prog.total
                     if (now - lastUi >= 250 || finished) {
@@ -407,12 +421,21 @@ class GenerationEngine(
                         }
                     }
                 }
+                val ext = extFromName ?: extFromContentType(ctype) ?: "png"
+                if (ext != file.extension) {
+                    val renamed = File(cache.imagesDir(), "${job.jobId}_${img.index}.$ext")
+                    renamed.delete()
+                    if (!file.renameTo(renamed)) {
+                        file.copyTo(renamed, overwrite = true)
+                        file.delete()
+                    }
+                    file = renamed
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 return false
             }
-            val file = dest
             // 护栏（direct12）：下载完成却解不出像素（0×0，文件损坏/半截）→ 删文件、不插行、跳过；
             // 不算失败，saveResults 不因此返回 false，轮询不会为此重试。
             var outW = 0
@@ -428,27 +451,26 @@ class GenerationEngine(
                 file.delete()
                 continue
             }
-            db.insertImage(
-                ImageRow(
-                    id = 0,
-                    jobId = job.jobId,
-                    clientJobId = clientId,
-                    idx = img.index,
-                    mode = job.mode,
-                    prompt = job.prompt,
-                    paramsJson = job.params.toString(),
-                    seed = img.seed,
-                    width = outW,
-                    height = outH,
-                    remoteFilename = img.filename,
-                    remoteSubfolder = img.subfolder,
-                    localPath = file.absolutePath,
-                    sizeBytes = file.length(),
-                    createdAt = System.currentTimeMillis(),
-                    savedToAlbum = false,
-                    albumUri = "",
-                ),
+            val imgRow = ImageRow(
+                id = 0,
+                jobId = job.jobId,
+                clientJobId = clientId,
+                idx = img.index,
+                mode = job.mode,
+                prompt = job.prompt,
+                paramsJson = job.params.toString(),
+                seed = img.seed,
+                width = outW,
+                height = outH,
+                remoteFilename = img.filename,
+                remoteSubfolder = img.subfolder,
+                localPath = file.absolutePath,
+                sizeBytes = file.length(),
+                createdAt = System.currentTimeMillis(),
+                savedToAlbum = false,
+                albumUri = "",
             )
+            db.insertImage(imgRow)
             cache.enforce()
             revision.value = revision.value + 1
         }
@@ -862,6 +884,9 @@ class GenerationEngine(
 
 /** 提交、上传参考图的网络失败自动重试上限。排队和生成中的轮询不走这条，仍用任务 deadline。 */
 private const val NETWORK_RETRY_CAP_MS = 5 * 60 * 1000L
+
+/** 图片产物允许的扩展名（按 ComfyUI 返回的 filename 判断）；不在此列的走 Content-Type。 */
+private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
 
 /** 原图上传满这段时间就弹出「继续 / 压缩」。只是界面计时，不取消请求。 */
 private const val ORIGINAL_UPLOAD_TIMEOUT_MS = 10_000L

@@ -16,6 +16,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -41,8 +42,8 @@ data class ByteProgress(
         get() = if (total > 0L) (done.toFloat() / total.toFloat()).coerceIn(0f, 1f) else -1f
 }
 
-class Transfer(private val settings: SettingsStore) {
-    private val http = fileClient()
+class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
+    private val http = fileClient(auth)
 
     suspend fun upload(file: File, onProgress: (Float) -> Unit): Pair<String, String> {
         var last: Exception? = null
@@ -102,6 +103,7 @@ class Transfer(private val settings: SettingsStore) {
             val json = if (text.trimStart().startsWith("{")) JSONObject(text) else JSONObject()
             if (!resp.isSuccessful) {
                 // ComfyUI 4xx 常返回纯文本而非 JSON：拿不到 error 字段就用 httpFallback；5xx 仍算网络错误可重试
+                if (resp.code == 401) throw authError()
                 val net = resp.code >= 500
                 throw ApiException(json.optString("error").ifBlank { httpFallback(resp.code) }, net)
             }
@@ -111,7 +113,10 @@ class Transfer(private val settings: SettingsStore) {
         }
     }
 
-    suspend fun download(urlPath: String, dest: File, onProgress: (ByteProgress) -> Unit) {
+    /**
+     * 下载到 dest。返回服务器给出的 Content-Type（用于决定扩展名/MIME），拿不到返回 null。
+     */
+    suspend fun download(urlPath: String, dest: File, onProgress: (ByteProgress) -> Unit): String? {
         val base = settings.baseUrl()
         val url = if (urlPath.startsWith("http")) urlPath else base + urlPath
         var last: Exception? = null
@@ -119,8 +124,7 @@ class Transfer(private val settings: SettingsStore) {
         for (i in 0 until 4) {
             if (backoff[i] > 0) delay(backoff[i])
             try {
-                withContext(Dispatchers.IO) { downloadOnce(url, dest, onProgress) }
-                return
+                return withContext(Dispatchers.IO) { downloadOnce(url, dest, onProgress) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
@@ -134,13 +138,15 @@ class Transfer(private val settings: SettingsStore) {
         throw (last as? ApiException) ?: friendlyIo()
     }
 
-    private suspend fun downloadOnce(url: String, dest: File, onProgress: (ByteProgress) -> Unit) {
+    private suspend fun downloadOnce(url: String, dest: File, onProgress: (ByteProgress) -> Unit): String? {
         dest.parentFile?.mkdirs()
         val part = File(dest.absolutePath + ".part")
         val existing = if (part.exists()) part.length() else 0L
         val builder = Request.Builder().url(url).get()
         if (existing > 0) builder.header("Range", "bytes=$existing-")
+        var contentType: String? = null
         http.callCancellable(builder.build()) { resp ->
+            contentType = resp.header("Content-Type")
             when (resp.code) {
                 206 -> writeBody(resp.body?.byteStream(), part, append = true, existing, resp, onProgress)
                 200 -> {
@@ -153,7 +159,10 @@ class Transfer(private val settings: SettingsStore) {
                     }
                     onProgress(ByteProgress(part.length(), part.length(), 0.0))
                 }
-                else -> throw ApiException(httpFallback(resp.code), network = resp.code >= 500)
+                else -> {
+                    if (resp.code == 401) throw authError()
+                    throw ApiException(httpFallback(resp.code), network = resp.code >= 500)
+                }
             }
         }
         if (dest.exists()) dest.delete()
@@ -161,6 +170,7 @@ class Transfer(private val settings: SettingsStore) {
             part.copyTo(dest, overwrite = true)
             part.delete()
         }
+        return contentType
     }
 
     private fun writeBody(

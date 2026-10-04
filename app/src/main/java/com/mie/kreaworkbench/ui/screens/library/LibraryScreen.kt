@@ -2,8 +2,10 @@ package com.mie.kreaworkbench.ui.screens.library
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -19,11 +22,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,20 +37,26 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.composables.icons.lucide.FileText
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Share2
+import com.composables.icons.lucide.Tag
 import com.composables.icons.lucide.Trash2
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.library.FMT_TXT
@@ -62,12 +73,9 @@ import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.ui.nav.NavModel
 import com.mie.kreaworkbench.ui.nav.Overlay
 import com.mie.kreaworkbench.data.workflows.safeExportName
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlinx.coroutines.launch
 
-private val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     val s by vm.settings.collectAsState()
@@ -88,6 +96,16 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     var confirmDeleteLib by remember { mutableStateOf<LibraryMeta?>(null) }
     var confirmDeleteWf by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameWf by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // r13fix 第 3 项：长按工作流行 → 操作弹层（重命名 / 分享 / 删除）
+    var wfMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // round13 第 3 项：长按库行 → 菜单（重命名库 / 重命名分组 → 选分组 → 输入新名）
+    var libMenu by remember { mutableStateOf<LibraryMeta?>(null) }
+    var renameLib by remember { mutableStateOf<LibraryMeta?>(null) }
+    var renameCat by remember { mutableStateOf<LibraryMeta?>(null) }
+    var renameCatOld by remember { mutableStateOf("") }
+    var renameCatInput by remember { mutableStateOf<LibraryMeta?>(null) }
+    var catList by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+    val scope = rememberCoroutineScope()
     var showExample by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
 
@@ -150,42 +168,39 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                 Spacer(Modifier.height(4.dp))
                 imported.forEach { wf ->
                     val isCur = s.currentWorkflow == wf.id
+                    // round13 第 2 项：改单行紧凑列表——去掉「导入于」次要行、压行距，
+                    // 一屏能看 8 个以上；「当前」徽标 + 加粗即选中态，不再用整宽 RadioButton
+                    // r13fix 第 3 项：去掉行内三个图标按钮，行高压到 ~44dp；点 = 设为当前，长按 = 操作弹层
                     Row(
-                        Modifier.fillMaxWidth().clickable { vm.setWorkflow(wf.id) },
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .combinedClickable(
+                                onClick = { vm.setWorkflow(wf.id) },
+                                onLongClick = { wfMenu = wf.id to wf.displayName },
+                            )
+                            .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = isCur, onClick = { vm.setWorkflow(wf.id) })
-                        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (isCur) {
-                                    Box(
-                                        Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(scheme.primary.copy(alpha = 0.15f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    ) {
-                                        Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = scheme.primary, fontWeight = FontWeight.Bold)
-                                    }
-                                    Spacer(Modifier.size(6.dp))
-                                }
-                                Text(
-                                    knownText(wf.displayName),
-                                    color = scheme.onSurface,
-                                    fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
-                                    maxLines = 1,
-                                )
+                        if (isCur) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(scheme.primary.copy(alpha = 0.15f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = scheme.primary, fontWeight = FontWeight.Bold)
                             }
-                            Text(stringResource(R.string.imported_at, fmt.format(Date(wf.importedAt))), fontSize = 11.sp, color = scheme.onSurfaceVariant)
+                            Spacer(Modifier.size(6.dp))
                         }
-                        IconButton(onClick = { renameWf = wf.id to wf.displayName }) {
-                            Icon(Lucide.Pencil, stringResource(R.string.action_rename), tint = scheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { vm.exportWorkflow(wf.id) }) {
-                            Icon(Lucide.Share2, stringResource(R.string.action_export), tint = scheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { confirmDeleteWf = wf.id to wf.displayName }) {
-                            Icon(Lucide.Trash2, stringResource(R.string.action_delete), tint = scheme.onSurfaceVariant)
-                        }
+                        Text(
+                            knownText(wf.displayName),
+                            color = scheme.onSurface,
+                            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
                 if (imported.isEmpty()) {
@@ -197,7 +212,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                     )
                 } else {
                     Text(
-                        stringResource(R.string.workflows_hint),
+                        stringResource(R.string.list_item_hint),
                         fontSize = 11.sp,
                         color = scheme.onSurfaceVariant,
                     )
@@ -241,7 +256,15 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                 libs.forEach { lib ->
                     val isCur = lib.id == currentId
                     Row(
-                        Modifier.fillMaxWidth().clickable { vm.setCurrent(lib.id) }.padding(vertical = 8.dp),
+                        // 点击 = 设为当前库；长按 = 操作弹层（编辑 / 重命名库 / 重命名分组 / 导出 / 删除）
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .combinedClickable(
+                                onClick = { vm.setCurrent(lib.id) },
+                                onLongClick = { libMenu = lib },
+                            )
+                            .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -262,31 +285,22 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                                     color = scheme.onSurface,
                                     fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             Text(
-                                pluralStringResource(R.plurals.imported_on, lib.count, lib.count, fmt.format(Date(lib.importedAt))),
+                                pluralStringResource(R.plurals.entry_count, lib.count, lib.count),
                                 fontSize = 11.sp,
+                                lineHeight = 14.sp,
                                 color = scheme.onSurfaceVariant,
+                                maxLines = 1,
                             )
-                        }
-                        // 编辑（round8 2.3）：仅 txt 且未超容量护栏（1MB）的库显示
-                        if (lib.id in editableIds) {
-                            IconButton(onClick = { nav.push(Overlay.LibraryEditor(lib.id)) }) {
-                                Icon(Lucide.Pencil, stringResource(R.string.action_edit), tint = scheme.onSurfaceVariant)
-                            }
-                        }
-                        IconButton(onClick = { startExport(lib) }) {
-                            Icon(Lucide.Share2, stringResource(R.string.action_export), tint = scheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { confirmDeleteLib = lib }) {
-                            Icon(Lucide.Trash2, stringResource(R.string.action_delete), tint = scheme.onSurfaceVariant)
                         }
                     }
                 }
-                if (libs.size > 1) {
+                if (libs.isNotEmpty()) {
                     Text(
-                        stringResource(R.string.prompts_hint),
+                        stringResource(R.string.list_item_hint),
                         fontSize = 11.sp,
                         color = scheme.onSurfaceVariant,
                     )
@@ -364,6 +378,149 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
         )
     }
 
+    // 长按工作流行 → 操作弹层
+    wfMenu?.let { (id, name) ->
+        RowActionSheet(
+            title = knownText(name),
+            onDismiss = { wfMenu = null },
+            actions = listOf(
+                RowAction(stringResource(R.string.action_rename), Lucide.Pencil) { renameWf = id to name },
+                RowAction(stringResource(R.string.action_share), Lucide.Share2) { vm.exportWorkflow(id) },
+                RowAction(stringResource(R.string.action_delete), Lucide.Trash2, danger = true) { confirmDeleteWf = id to name },
+            ),
+        )
+    }
+
+    // 长按库行 → 操作弹层（round13 的重命名库/分组 + 原行内的编辑/导出/删除）
+    libMenu?.let { lib ->
+        val actions = buildList {
+            // 编辑（round8 2.3）：仅 txt 且未超容量护栏（1MB）的库显示
+            if (lib.id in editableIds) {
+                add(RowAction(stringResource(R.string.action_edit), Lucide.FileText) { nav.push(Overlay.LibraryEditor(lib.id)) })
+            }
+            add(RowAction(stringResource(R.string.rename_library), Lucide.Pencil) { renameLib = lib })
+            add(
+                RowAction(stringResource(R.string.rename_category), Lucide.Tag) {
+                    scope.launch {
+                        catList = vm.categoriesOf(lib.id)
+                        renameCat = lib
+                    }
+                },
+            )
+            add(RowAction(stringResource(R.string.action_export), Lucide.Share2) { startExport(lib) })
+            add(RowAction(stringResource(R.string.action_delete), Lucide.Trash2, danger = true) { confirmDeleteLib = lib })
+        }
+        RowActionSheet(title = knownText(lib.name), onDismiss = { libMenu = null }, actions = actions)
+    }
+
+    renameLib?.let { lib ->
+        var text by remember(lib.id) { mutableStateOf(lib.name) }
+        val trimmed = text.trim()
+        // 重名校验：与其他库同名不允许（同库改名回原名字然 OK）
+        val dup = libs.any { it.id != lib.id && it.name == trimmed }
+        AlertDialog(
+            onDismissRequest = { renameLib = null },
+            title = { Text(stringResource(R.string.rename_library)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        singleLine = true,
+                        isError = trimmed.isBlank() || dup,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (dup) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = scheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.renameLibrary(lib.id, trimmed)
+                        renameLib = null
+                    },
+                    enabled = trimmed.isNotBlank() && !dup,
+                ) { Text(stringResource(R.string.action_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameLib = null }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
+    renameCat?.let { lib ->
+        AlertDialog(
+            onDismissRequest = { renameCat = null },
+            title = { Text(stringResource(R.string.pick_category_rename)) },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    if (catList.isEmpty()) {
+                        Text(stringResource(R.string.prompts_empty), fontSize = 13.sp, color = scheme.onSurfaceVariant)
+                    }
+                    catList.forEach { (name, count) ->
+                        TextButton(onClick = {
+                            renameCatOld = name
+                            renameCatInput = lib
+                            renameCat = null
+                        }) {
+                            Text(
+                                stringResource(R.string.category_count, knownText(name), count),
+                                color = scheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { renameCat = null }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
+    renameCatInput?.let { lib ->
+        var text by remember(lib.id + renameCatOld) { mutableStateOf(renameCatOld) }
+        val trimmed = text.trim()
+        // 与该库其他既有分组同名 = 合并，先拦下并提示（重命名分组不是合并入口）
+        val dup = catList.any { it.first == trimmed && it.first != renameCatOld }
+        AlertDialog(
+            onDismissRequest = { renameCatInput = null },
+            title = { Text(stringResource(R.string.rename_category)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.draw_cat, knownText(renameCatOld)), fontSize = 13.sp, color = scheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        singleLine = true,
+                        isError = trimmed.isBlank() || dup,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (dup) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = scheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.renameCategory(lib.id, renameCatOld, trimmed)
+                        renameCatInput = null
+                    },
+                    enabled = trimmed.isNotBlank() && !dup,
+                ) { Text(stringResource(R.string.action_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameCatInput = null }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
     vm.nameMismatch?.let { ask ->
         AlertDialog(
             onDismissRequest = { vm.answerNameMismatch(false) },
@@ -432,5 +589,43 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                 TextButton(onClick = { showExample = false }) { Text(stringResource(R.string.action_got_it)) }
             },
         )
+    }
+}
+
+private class RowAction(
+    val label: String,
+    val icon: ImageVector,
+    val danger: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/** 列表行长按后的操作弹层：标题 + 一列动作（危险动作用 error 色）；点动作先关弹层再执行。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RowActionSheet(title: String, onDismiss: () -> Unit, actions: List<RowAction>) {
+    val scheme = MaterialTheme.colorScheme
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            color = scheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+        )
+        Column(Modifier.navigationBarsPadding().padding(bottom = 8.dp)) {
+            actions.forEach { a ->
+                val tint = if (a.danger) scheme.error else scheme.onSurfaceVariant
+                ListItem(
+                    headlineContent = { Text(a.label, color = if (a.danger) scheme.error else scheme.onSurface) },
+                    leadingContent = { Icon(a.icon, contentDescription = null, tint = tint) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable {
+                        onDismiss()
+                        a.onClick()
+                    },
+                )
+            }
+        }
     }
 }

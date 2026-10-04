@@ -501,7 +501,6 @@ private fun inferOne(nid: String, field: String, value: Any?, classType: String,
                 .put("tier", "model").put("confidence", "high")
                 .put("current_value", value ?: "").put("node_title", nodeTitle)
                 .put("enabled", true).put("label", label)
-                .put("help", "本工作流需要的模型；运行页可下拉换成本机已装的同类型模型。")
         }
     }
 

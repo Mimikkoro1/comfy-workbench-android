@@ -23,6 +23,7 @@ import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_SOURCE
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.data.workflows.pickOutputNode
 import com.mie.kreaworkbench.startGenerationService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -110,6 +111,15 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     // kwb_combo select 的在线选项：key → /object_info 实时枚举（拉不到=空列表，退 definition.choices）
     var comboChoices by mutableStateOf(emptyMap<String, List<String>>())
+        private set
+
+    // 选项拉取失败（401/超时/断网）的 spec key（round13 第 4 项）：这些槽位 UI 退化为
+    // 可编辑输入框并提示，而不是只读文本；重拉成功后清空。
+    var choiceLoadFailed by mutableStateOf(emptySet<String>())
+        private set
+
+    // 「刷新」进行中（round13 第 7 项：模型采样 Tab 顶部按钮）
+    var refreshing by mutableStateOf(false)
         private set
 
     // 抽卡共享筛选（决策 2）：所有 prompt_pool 抽卡共用，存 last_values 私有键 kwb_draw_filter
@@ -203,6 +213,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 restore(id)
+                // 换绑先清上一工作流的选项映射，避免同名 key（node|field 可能撞）串台；
+                // 下面 loadChoices 失败的槽位就是「无选项 + 提示」，而不是残留旧值
+                modelChoices = emptyMap()
+                comboChoices = emptyMap()
                 loadChoices()
             } catch (e: Exception) {
                 message = e.message ?: e.javaClass.simpleName
@@ -266,9 +280,14 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     private fun trimNum(d: Double): String =
         if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
 
-    /** model spec 的下拉选项 + kwb_combo select 的在线选项（只读 GET）；失败留空，UI 走兜底。 */
+    /**
+     * model spec 的下拉选项 + kwb_combo select 的在线选项。
+     * round13 第 4 项：单个槽位拉取失败（401/超时等）时保留该槽位的旧选项、不再写空列表
+     * （写空会让下拉退化成只读文本且被记住），槽位 key 记入 choiceLoadFailed 供 UI 提示。
+     */
     private suspend fun loadChoices() {
         val wf = workflowJson ?: return
+        val failed = mutableSetOf<String>()
         for (spec in specs) {
             val key = Specs.key(spec)
             when (Specs.type(spec)) {
@@ -282,7 +301,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                         val choices = c.api.modelChoices(cls, Specs.field(spec))
                         modelChoices = modelChoices + (key to choices)
                     } catch (_: Exception) {
-                        modelChoices = modelChoices + (key to emptyList())
+                        failed.add(key)
                     }
                 }
                 "select" -> {
@@ -296,9 +315,47 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     try {
                         comboChoices = comboChoices + (key to c.api.comboChoices(cls, field))
                     } catch (_: Exception) {
-                        comboChoices = comboChoices + (key to emptyList())
+                        failed.add(key)
                     }
                 }
+            }
+        }
+        choiceLoadFailed = failed
+    }
+
+    /** 仅重拉当前工作流的选项（不动模型目录缓存）；err=null 成功。供参数区「重试」复用。 */
+    fun refreshChoices(onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                loadChoices()
+                onDone(null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onDone(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    /**
+     * 「模型采样」Tab 顶部刷新（round13 第 7 项）：清掉模型目录内存缓存重新请求 /object_info
+     * （拿到最新 checkpoint/LoRA/VAE 与 sampler/scheduler 选项），再重拉本页全部下拉选项，
+     * 相当于重新解析参数面板。已填的参数值（textValues）一律不动；中途任何一步失败都保留
+     * 旧数据（models 失败时 ComfyApi 不覆盖旧缓存，选项失败时槽位保留旧值），err 回调给 UI 提示。
+     */
+    fun refreshAll(onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            refreshing = true
+            try {
+                c.api.models(refresh = true)
+                loadChoices()
+                onDone(null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onDone(e.message ?: e.javaClass.simpleName)
+            } finally {
+                refreshing = false
             }
         }
     }
@@ -640,7 +697,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     fun cancel(clientJobId: String) = c.engine.cancel(clientJobId)
 
     fun resume(clientJobId: String) {
-        c.engine.kick(clientJobId)
+        // 用户手动点「继续」：允许提交恢复失败后重新提交（区别于自动 reconcile）
+        c.engine.resumeManual(clientJobId)
         startGenerationService(getApplication())
     }
 

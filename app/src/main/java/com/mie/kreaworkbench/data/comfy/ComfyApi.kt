@@ -28,6 +28,10 @@ import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.data.workflows.WorkflowStore
 import com.mie.kreaworkbench.data.workflows.baseClass
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import okhttp3.Credentials
+import okhttp3.Interceptor
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,11 +48,26 @@ class ComfyApi(
     private val ctx: Context,
     private val settings: SettingsStore,
     private val db: GalleryDb,
+    auth: Interceptor? = null,
 ) {
-    private val http = jsonClient()
-    private val progress = ComfyProgress(settings)
+    private val http = jsonClient(auth)
+    private val progress = ComfyProgress(settings, auth)
 
     @Volatile private var catalogCache: ModelCatalog? = null
+
+    /** /queue 短缓存（round13 第 1 项）：多任务并发轮询在同一秒内共享一份队列快照。
+     *  每个任务的 poll 每 1.5s 都要拉 /queue + n 个 /history，N 个任务并发时 /queue 请求量翻 N 倍，
+     *  外网高延迟下会把 Caddy/ComfyUI 拖慢、轮询被节流到异常退避，卡片状态长时间停在旧值。 */
+    @Volatile private var queueCache: Pair<Long, JSONObject>? = null
+
+    private suspend fun queueCached(): JSONObject {
+        queueCache?.let { (at, q) ->
+            if (System.currentTimeMillis() - at < QUEUE_CACHE_MS) return q
+        }
+        val q = get("/queue")
+        queueCache = System.currentTimeMillis() to q
+        return q
+    }
 
     private suspend fun get(path: String, attempts: Int = 4, base: String? = null): JSONObject {
         val b = base ?: settings.baseUrl()
@@ -62,11 +81,15 @@ class ComfyApi(
         }, idempotent)
     }
 
-    suspend fun ping(base: String): PingResult {
+    suspend fun ping(base: String, user: String = "", pass: String = ""): PingResult {
         val b = trimBase(base)
         if (b.isBlank()) throw ApiException(ctx.str(R.string.ping_need_server))
         val t = System.nanoTime()
-        val json = get("/system_stats", attempts = 1, base = b)
+        val json = http.callJson({
+            val rb = Request.Builder().url(b + "/system_stats").get()
+            if (user.isNotBlank()) rb.header("Authorization", Credentials.basic(user, pass))
+            rb.build()
+        }, idempotent = true, attempts = 1)
         val ms = (System.nanoTime() - t) / 1_000_000
         val version = json.optJSONObject("system")?.optString("comfyui_version").orEmpty()
         return PingResult(
@@ -89,6 +112,9 @@ class ComfyApi(
             .put("scheduler", "simple")
             .put("shift", 3)
             .put("denoise", 0.55)
+        // 拉取过程一旦失败（401/超时/断网）直接上抛：绝不把空列表写进 catalogCache，
+        // 否则 KSampler 选项会以「空下拉」的形态被缓存住（round13 第 4 项的根因之一）。
+        // 失败时保留旧缓存（refresh 重试失败也退回旧值），调用方自行提示。
         val cat = ModelCatalog(
             // 任务书写的 source="comfy"，但 ModelsScreen 只认 "object_info"/"filesystem"，
             // 沿用 UI 已有约定值以正确显示「来源：ComfyUI」
@@ -105,19 +131,26 @@ class ComfyApi(
         return cat
     }
 
-    /** 取 <Class>.input.required.<field>[0] 的字符串数组。网络不通时上抛，节点缺失时给空列表。 */
-    private suspend fun objectInfoList(cls: String, field: String): List<String> = try {
-        val json = get("/object_info/$cls")
-        json.optJSONObject(cls)
+    /**
+     * 取 <Class>.input.required.<field>[0] 的字符串数组。
+     * 404（本机没有这个节点）返回空列表属正常；其他失败（401/5xx/超时/断网）一律上抛，
+     * 绝不静默变成空列表——调用方要么保留旧值要么提示，界面不再退化成只读文本。
+     */
+    private suspend fun objectInfoList(cls: String, field: String): List<String> {
+        val seg = URLEncoder.encode(cls, "UTF-8").replace("+", "%20")
+        val json = try {
+            get("/object_info/$seg")
+        } catch (e: ApiException) {
+            if (e.code == 404) return emptyList()
+            throw e
+        }
+        return json.optJSONObject(cls)
             ?.optJSONObject("input")
             ?.optJSONObject("required")
             ?.optJSONArray(field)
             ?.optJSONArray(0)
             ?.strings()
             ?: emptyList()
-    } catch (e: ApiException) {
-        if (e.network) throw e
-        emptyList()
     }
 
     /** 导入工作流的 model spec 下拉选项：/object_info/<该节点 class_type> 的同名字段列表（只读 GET）。 */
@@ -146,6 +179,10 @@ class ComfyApi(
 
     suspend fun submitJob(body: JSONObject): RemoteJob {
         progress.ensure()
+        // manual_retry 只在引擎收到「用户手动重试」时注入，这里立刻取走，避免它被 recordPrompts 持久化，
+        // 之后自动 reconcile 再进来时误当手动放行
+        val manualRetry = body.optBoolean("manual_retry")
+        body.remove("manual_retry")
         val clientId = body.optString("client_job_id")
         val mode = body.optString("mode", "t2i")
         val flows = buildCustomWorkflows(ctx, body)
@@ -158,11 +195,21 @@ class ComfyApi(
             existing[i + 1]?.let { prompts.put(it) }
         }
         // 幂等补洞：submit_attempted 标记说明此任务之前提交过、记录里却还缺 index——
-        // 上次 POST 可能已到达 ComfyUI 但响应丢失（prompt_id 没记下来），
-        // 先按 extra_data 从 /queue + /history 找回 prompt_id，找到就不重交
+        // 先按 extra_data 从 /queue + /history 找回 prompt_id。找回不全且不是用户手动重试时，
+        // 绝不自动补交（POST 可能其实已到达、只是响应丢失/服务器重启丢了 /history，
+        // 补交会重复出图）：抛非网络错误让任务标记失败，等用户手动点重试（manual_retry 放行）。
         val recovered = if (submitAttempted(clientId)) {
             val missing = (1..flows.size).filter { !existing.containsKey(it) }
-            if (missing.isNotEmpty()) recoverPrompts(clientId, missing, flows, body) else emptyMap()
+            if (missing.isNotEmpty()) {
+                val found = recoverPrompts(clientId, missing, flows, body)
+                val stillMissing = missing.filter { it !in found }
+                if (stillMissing.isNotEmpty() && !manualRetry) {
+                    throw ApiException(ctx.str(R.string.err_recover_stopped), network = false)
+                }
+                found
+            } else {
+                emptyMap()
+            }
         } else {
             emptyMap()
         }
@@ -215,6 +262,7 @@ class ComfyApi(
         val params = JSONObject(body.toString())
         params.remove("comfy_prompts")
         params.remove("submit_attempted")
+        params.remove("manual_retry")
         return RemoteJob(
             jobId = "cq_$clientId",
             clientJobId = clientId,
@@ -252,7 +300,7 @@ class ComfyApi(
         val n = prompts?.length() ?: 0
         if (n == 0) throw ApiException(ctx.str(R.string.err_job_no_submit), network = false)
 
-        val q = get("/queue")
+        val q = queueCached()
         val runningIds = HashSet<String>()
         val runningArr = q.optJSONArray("queue_running") ?: JSONArray()
         for (i in 0 until runningArr.length()) {
@@ -299,18 +347,28 @@ class ComfyApi(
         // custom 任务按节点分阶段（采样 1/2 / 合成视频）；null = 拿不到就退回普通步数显示
         val stageLabels: Map<String, String>? = if (isCustom) stageLabelsFor(body) else null
 
+        // history 并行预取（round13 第 1 项）：外网 RTT 高时串行 n 个请求会把单次 getJob 拖到
+        // n×RTT 以上，状态刷新随之变慢；并行后降到一次 RTT。任一网络失败整体上抛（同旧行为）。
+        val hists = coroutineScope {
+            (0 until n).map { i ->
+                async {
+                    val pid = prompts?.optJSONObject(i)?.optString("prompt_id").orEmpty()
+                    try {
+                        get("/history/$pid")
+                    } catch (e: ApiException) {
+                        if (e.network) throw e
+                        JSONObject()
+                    }
+                }
+            }.map { it.await() }
+        }
+
         for (i in 0 until n) {
             val o = prompts?.optJSONObject(i) ?: continue
             val pid = o.optString("prompt_id")
             val seed = o.optLong("seed")
             val index = o.optInt("index", i + 1)
-            val hist = try {
-                get("/history/$pid")
-            } catch (e: ApiException) {
-                if (e.network) throw e
-                JSONObject()
-            }
-            val h = hist.optJSONObject(pid)
+            val h = hists[i].optJSONObject(pid)
             if (h == null) {
                 when {
                     pid in runningIds -> runningCount++
@@ -558,7 +616,7 @@ class ComfyApi(
             }
         } catch (e: ApiException) {
             if (e.network) throw e
-            // 响应形状异常就当没找到，走正常补交（最坏情况退回旧行为：可能多交一张）
+            // 响应形状异常就当没找到；是否允许补交由调用方的 manual_retry 守卫决定
         }
         return found
     }
@@ -618,8 +676,11 @@ class ComfyApi(
             val q = get("/queue")
             val runningArr = q.optJSONArray("queue_running") ?: JSONArray()
             for (i in 0 until runningArr.length()) {
-                if (runningArr.optJSONArray(i)?.optString(1) in ids) {
-                    post("/interrupt", JSONObject(), idempotent = false)
+                val pid = runningArr.optJSONArray(i)?.optString(1)
+                if (pid in ids) {
+                    // 新版 ComfyUI 可只中断指定任务（带 prompt_id）；带不上就退回 {} 中断当前
+                    val body = if (pid.isNullOrBlank()) JSONObject() else JSONObject().put("prompt_id", pid)
+                    post("/interrupt", body, idempotent = false)
                     break
                 }
             }
@@ -689,5 +750,8 @@ class ComfyApi(
 
     private companion object {
         const val SAVE_NODE = "16"
+
+        /** /queue 共享缓存窗口：轮询周期 1.5s，窗口取 1s 保证每个周期至少刷新一次。 */
+        const val QUEUE_CACHE_MS = 1000L
     }
 }

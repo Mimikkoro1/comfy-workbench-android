@@ -71,6 +71,9 @@ import com.mie.kreaworkbench.ui.screens.library.LibraryScreen
 import com.mie.kreaworkbench.ui.screens.library.WorkflowImportScreen
 import com.mie.kreaworkbench.ui.screens.models.ModelsScreen
 import com.mie.kreaworkbench.ui.screens.settings.AboutScreen
+import com.mie.kreaworkbench.ui.screens.settings.AppearancePage
+import com.mie.kreaworkbench.ui.screens.settings.BackgroundPage
+import com.mie.kreaworkbench.ui.screens.settings.ConnectionPage
 import com.mie.kreaworkbench.ui.screens.settings.SettingsHome
 import com.mie.kreaworkbench.ui.screens.viewer.ViewerScreen
 import android.net.Uri
@@ -106,6 +109,18 @@ private sealed interface Scene {
     data object About : Scene {
         override val depth = 1
     }
+
+    data object SettingsConnection : Scene {
+        override val depth = 1
+    }
+
+    data object SettingsBackground : Scene {
+        override val depth = 1
+    }
+
+    data object SettingsAppearance : Scene {
+        override val depth = 1
+    }
 }
 
 private fun sceneOf(stack: List<Overlay>): Scene = when (val top = stack.lastOrNull()) {
@@ -115,6 +130,9 @@ private fun sceneOf(stack: List<Overlay>): Scene = when (val top = stack.lastOrN
     is Overlay.WorkflowImport -> Scene.WorkflowImport(top.uris)
     is Overlay.LibraryEditor -> Scene.LibraryEditor(top.libId)
     Overlay.About -> Scene.About
+    Overlay.SettingsConnection -> Scene.SettingsConnection
+    Overlay.SettingsBackground -> Scene.SettingsBackground
+    Overlay.SettingsAppearance -> Scene.SettingsAppearance
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -281,6 +299,9 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
             onBack = { nav.pop() },
         )
         Scene.About -> AboutScreen(onBack = { nav.pop() })
+        Scene.SettingsConnection -> ConnectionPage(onBack = { nav.pop() })
+        Scene.SettingsBackground -> BackgroundPage(onBack = { nav.pop() })
+        Scene.SettingsAppearance -> AppearancePage(onBack = { nav.pop() })
     }
 }
 

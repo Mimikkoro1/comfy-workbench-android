@@ -55,6 +55,7 @@ import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.data.workflows.shownHelp
 import com.mie.kreaworkbench.data.workflows.videoSourceWarnLimit
 import com.mie.kreaworkbench.ui.components.CompactMenuField
+import com.mie.kreaworkbench.ui.components.CompactTextField
 import com.mie.kreaworkbench.ui.components.MiniField
 import com.mie.kreaworkbench.ui.components.PromptField
 import com.mie.kreaworkbench.ui.locale.knownText
@@ -86,7 +87,8 @@ fun SpecRow(
     val rawLabel = Specs.label(spec)
     val label = knownText(rawLabel)
     val showLabel = if (cardTitle == null) true else rawLabel != stringZh(cardTitle)
-    val help = shownHelp(spec, vm.outputKind)
+    // 模型类 spec 不显示说明（旧定义里每个模型都带同一句 wf_help_model，重复占位）
+    val help = if (type == "model") "" else shownHelp(spec, vm.outputKind)
     // 抽卡只在文生图、且当前库有条目时出现。判定只走 isTextToImageWorkflow。
     val hasLib by vm.hasPromptLibrary.collectAsState()
     val drawOk = hasLib && isTextToImageWorkflow(vm.outputKind, vm.specs)
@@ -150,7 +152,8 @@ fun SpecRow(
                 }
             }
             "select" -> {
-                // 选项三级来源：①kwb_combo 在线实时 → ②definition 的 choices → ③仅显示当前值占位
+                // 选项三级来源：①kwb_combo 在线实时 → ②definition 的 choices → ③无选项时退化为
+                // 可编辑输入框（round13 第 4 项：不再退成只读文本）
                 val online = vm.comboChoices[key].orEmpty()
                 val fromDef = Specs.choices(spec)
                 val choices = when {
@@ -168,7 +171,21 @@ fun SpecRow(
                     else -> please
                 }
                 if (choices.isEmpty()) {
-                    Text(shown, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+                    // 选项拿不到（/object_info 失败且 definition 也没写 choices）：可编辑输入框，
+                    // 已填的值原样保留；拉取失败过的槽位给出说明
+                    CompactTextField(
+                        value = value,
+                        onValueChange = { vm.setText(key, it); vm.persist() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (key in vm.choiceLoadFailed) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.choices_not_loaded),
+                            fontSize = 11.sp,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
                 } else {
                     CompactMenuField(
                         value = shown,
@@ -180,41 +197,75 @@ fun SpecRow(
                             vm.persist()
                         }
                     }
+                    if (value.isNotBlank() && idx < 0) {
+                        Spacer(Modifier.height(4.dp))
+                        // 已填的值不在新拉到的列表里：标红提示，值保留不静默替换（round13 第 7 项）
+                        Text(
+                            stringResource(R.string.value_not_in_list),
+                            fontSize = 11.sp,
+                            color = scheme.error,
+                        )
+                    }
                 }
             }
             "model" -> {
                 val value = vm.textValues[key].orEmpty()
                 val choices = vm.modelChoices[key].orEmpty()
                 val found = value.isNotBlank() && value in choices
-                // 空值显示「请选择」；有值但不在本机列表才显示「本机未找到」
-                val please = stringResource(R.string.please_select)
-                val placeholder = if (value.isBlank()) please else stringResource(R.string.model_missing, value)
-                val labels = if (found) choices else listOf(placeholder) + choices
-                CompactMenuField(
-                    value = if (found) value else placeholder,
-                    options = labels,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { i ->
-                    val chosen = if (found) {
-                        choices.getOrNull(i)
-                    } else {
-                        // 第 0 项是占位（请选择/本机未找到），不选
-                        if (i == 0) null else choices.getOrNull(i - 1)
+                // 选项没拉到（/object_info 失败）：退化为可编辑输入框，值保留；不再弹一个
+                // 只有占位项的空下拉（round13 第 4 项）
+                if (choices.isEmpty()) {
+                    CompactTextField(
+                        value = value,
+                        onValueChange = { vm.setText(key, it, 400); vm.persist() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (key in vm.choiceLoadFailed) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.choices_not_loaded),
+                            fontSize = 11.sp,
+                            color = scheme.onSurfaceVariant,
+                        )
                     }
-                    chosen?.let {
-                        vm.setText(key, it)
-                        vm.persist()
+                } else {
+                    // 空值显示「请选择」；有值但不在本机列表才显示「本机未找到」
+                    val please = stringResource(R.string.please_select)
+                    val placeholder = if (value.isBlank()) please else stringResource(R.string.model_missing, value)
+                    val labels = if (found) choices else listOf(placeholder) + choices
+                    CompactMenuField(
+                        value = if (found) value else placeholder,
+                        options = labels,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { i ->
+                        val chosen = if (found) {
+                            choices.getOrNull(i)
+                        } else {
+                            // 第 0 项是占位（请选择/本机未找到），不选
+                            if (i == 0) null else choices.getOrNull(i - 1)
+                        }
+                        chosen?.let {
+                            vm.setText(key, it)
+                            vm.persist()
+                        }
+                    }
+                    if (value.isNotBlank() && !found) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.value_not_in_list),
+                            fontSize = 11.sp,
+                            color = scheme.error,
+                        )
                     }
                 }
             }
             "int" -> {
-                OutlinedTextField(
+                // 与下拉框同款紧凑外观（40dp/12dp 圆角），不再用高 56dp 的 OutlinedTextField
+                CompactTextField(
                     value = vm.textValues[key].orEmpty(),
                     onValueChange = { vm.setIntText(key, it); vm.persist() },
-                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                    keyboardType = KeyboardType.Number,
                 )
                 RangeHint(spec)
             }
@@ -261,13 +312,11 @@ fun SpecRow(
                     valueRange = min.toFloat()..max.toFloat(),
                     steps = (intervals - 1).coerceAtLeast(0),
                 )
-                OutlinedTextField(
+                CompactTextField(
                     value = vm.textValues[key].orEmpty(),
                     onValueChange = { vm.setFloatText(key, it); vm.persist() },
-                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                    keyboardType = KeyboardType.Decimal,
                 )
             }
             "bool" -> {

@@ -90,12 +90,28 @@
     <string name="settings_blur_desc">顶栏和底栏毛玻璃。Android 12 以下自动使用半透明</string>
     <string name="settings_notifications">通知</string>
     <string name="settings_notify_done">出图通知</string>
+    <string name="field_user">用户名</string>
+    <string name="field_pass">密码</string>
+    <string name="show_password">显示密码</string>
+    <string name="hide_password">隐藏密码</string>
+    <string name="auth_needed">需要账号密码（401）</string>
+    <string name="server_history">最近地址</string>
+    <string name="err_auth_failed">账号或密码错误（401）</string>
+    <string name="err_recover_stopped">上次提交在服务器上未确认，已停止自动补交（避免重复出图）。点「重试」手动重新提交。</string>
+    <string name="settings_battery">后台运行</string>
+    <string name="settings_battery_desc">允许后台运行并加入电池优化白名单，锁屏或切后台时任务不易被系统中断。如仍被杀，请到系统电池设置里允许本应用后台运行。</string>
+    <string name="battery_status_on">已允许</string>
+    <string name="battery_status_off">未允许，点此开启</string>
+    <string name="action_battery_ignore">忽略电池优化</string>
+    <string name="battery_hint_title">允许后台下载？</string>
+    <string name="battery_hint_body">为了在锁屏或切到后台时继续生成、下载结果，建议点「允许」把本应用加入电池优化白名单；如仍被杀，请到系统电池设置里允许本应用后台运行。可跳过，稍后能在设置里开启。</string>
+    <string name="battery_hint_go">允许</string>
+    <string name="battery_hint_later">下次再说</string>
     <string name="ping_need_server">请先填写服务器地址</string>
     <string name="ping_connecting">正在连接…</string>
     <string name="ping_latency">%1$s · 延迟 %2$d ms</string>
     <string name="ping_timeout">连接测试超时（65 秒），请稍后重试</string>
     <string name="about_unreleased">待发布</string>
-    <string name="about_gpl_note">本应用基于 GPL-3.0 协议免费开源</string>
     <string name="about_version">版本</string>
     <string name="about_system">系统</string>
     <string name="cache_title">缓存管理</string>
@@ -197,12 +213,10 @@
     <string name="imported_at">导入 · %1$s</string>
     <string name="state_importing_long">正在导入，请稍候…</string>
     <string name="workflows_empty">还没有导入的工作流：点右上角「导入工作流」，选一对 workflow + definition 的 .json（或单个 API 格式 .json）</string>
-    <string name="workflows_hint">点条目设为当前工作流；「生成」页与「模型和采样」页按当前工作流显示参数</string>
     <string name="state_importing">导入中…</string>
     <string name="section_prompts">提示词库</string>
     <string name="example_format">示例格式</string>
     <string name="prompts_empty">还没有提示词库，点「导入」选择 .json / .txt 文件</string>
-    <string name="prompts_hint">点库名设为当前；删除当前库会自动切到最近导入的库</string>
     <string name="delete_library_title">删除提示词库</string>
     <string name="delete_library_body">删除「%1$s」（%2$s）？该操作不可恢复。</string>
     <string name="delete_workflow_title">删除导入工作流</string>
@@ -281,8 +295,9 @@
     <string name="phase_submit_retry">提交重试中 · %1$s</string>
     <string name="phase_queued">排队中</string>
     <string name="phase_image_of">第 %1$d/%2$d 张</string>
-    <string name="phase_running_steps">生成中 %1$s · 步数 %2$d/%3$d</string>
-    <string name="phase_running">生成中 %1$s</string>
+    <!-- round13 第 1 项：进度行改为「生成中 · 段1 · 段2」拼接，旧的整句格式废弃 -->
+    <string name="phase_running_plain">生成中</string>
+    <string name="phase_step_of">%1$d/%2$d 步</string>
     <string name="phase_video_retry">视频下载失败，点击重试</string>
     <string name="phase_downloading">下载中 %1$s</string>
     <string name="phase_done">完成</string>
@@ -371,7 +386,6 @@
     <string name="wf_upscale">放大模型</string>
     <string name="wf_help_image">上传本次生成使用的参考图片。</string>
     <string name="wf_help_video_unsupported">本版不支持视频输入。</string>
-    <string name="wf_help_model">本工作流需要的模型；运行页可下拉换成本机已装的同类型模型。</string>
     <string name="wf_help_seed">选「随机」每张图自动换种子；选「固定」使用上面的数值。</string>
     <string name="wf_help_seed_old">勾上「随机」则每张图各自随机；不勾则用固定数值。</string>
     <string name="wf_help_size">可选预设尺寸，或填入自定义尺寸</string>
@@ -424,4 +438,33 @@
         <item quantity="one">当前备选 %1$d 张</item>
         <item quantity="other">当前备选 %1$d 张</item>
     </plurals>
+
+    <!-- round13 -->
+    <string name="action_refresh">刷新</string>
+    <string name="refresh_done">已刷新</string>
+    <string name="refresh_failed">刷新失败 · %1$s</string>
+    <string name="choices_not_loaded">选项未加载，当前值已保留，可直接编辑</string>
+    <string name="value_not_in_list">当前值不在列表中</string>
+    <string name="rename_library">重命名提示词库</string>
+    <string name="rename_category">重命名分组</string>
+    <string name="pick_category_rename">选择要重命名的分组</string>
+    <string name="dup_name">名称已存在</string>
+    <string name="group_connection">ComfyUI 服务器</string>
+    <string name="group_look">外观与语言</string>
+    <string name="group_storage">存储与缓存</string>
+    <string name="group_about">关于</string>
+    <string name="list_item_hint">点条目设为当前，长按更多操作</string>
+    <string name="status_not_set">未设置</string>
+    <string name="status_cache">缓存 %1$s</string>
+    <!-- round14 -->
+    <string name="update_check">检查更新</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_latest">已是最新版本</string>
+    <string name="update_failed">检查失败：%1$s</string>
+    <string name="update_title">发现新版本 v%1$s</string>
+    <string name="update_download">去下载</string>
+    <string name="update_ignore">忽略此版本</string>
+    <string name="update_later">稍后</string>
+    <string name="update_no_notes">（无更新说明）</string>
+    <string name="about_gpl_note">本应用基于 GPL-3.0 协议免费开源</string>
 </resources>

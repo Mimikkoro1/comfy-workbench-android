@@ -20,8 +20,8 @@ android {
         applicationId = "com.mie.kreaworkbench.direct"
         minSdk = 26
         targetSdk = 37
-        versionCode = 51
-        versionName = "0.1.1"
+        versionCode = 55
+        versionName = "0.2.2"
     }
 
     signingConfigs {
@@ -101,6 +101,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.9.1")
     implementation("androidx.lifecycle:lifecycle-process:2.9.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")

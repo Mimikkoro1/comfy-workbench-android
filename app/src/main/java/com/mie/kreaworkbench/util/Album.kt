@@ -34,16 +34,13 @@ fun albumUriExists(context: Context, uriString: String): Boolean {
 }
 
 fun saveToAlbum(context: Context, file: File, displayName: String): String {
-    val mime = when {
-        displayName.endsWith(".jpg", true) || displayName.endsWith(".jpeg", true) -> "image/jpeg"
-        displayName.endsWith(".webp", true) -> "image/webp"
-        else -> "image/png"
-    }
+    // MIME 按文件真实扩展名给（bug 修复：以前 gif/webp 之外一律 image/png）
+    val mime = mimeForImage(file.extension.ifBlank { "png" })
     val values = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
         put(MediaStore.Images.Media.MIME_TYPE, mime)
         if (Build.VERSION.SDK_INT >= 29) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Comfy Workbench")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Comfy直连")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }
@@ -62,20 +59,14 @@ fun saveToAlbum(context: Context, file: File, displayName: String): String {
     return uri.toString()
 }
 
-/** 视频入相册：Movies/Comfy Workbench（MediaStore.Video）。 */
+/** 视频入相册：Movies/Comfy直连（MediaStore.Video）。 */
 fun saveVideoToAlbum(context: Context, file: File, displayName: String): String {
-    val mime = when (file.extension.lowercase()) {
-        "webm" -> "video/webm"
-        "mov" -> "video/quicktime"
-        "mkv" -> "video/x-matroska"
-        "gif" -> "image/gif"
-        else -> "video/mp4"
-    }
+    val mime = mimeForVideo(file.extension.ifBlank { "mp4" })
     val values = ContentValues().apply {
         put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
         put(MediaStore.Video.Media.MIME_TYPE, mime)
         if (Build.VERSION.SDK_INT >= 29) {
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Comfy Workbench")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Comfy直连")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
     }
@@ -101,9 +92,12 @@ fun saveImageIfNeeded(context: Context, row: ImageRow): SaveOutcome {
     val file = File(row.localPath)
     if (!file.exists()) return SaveOutcome.Failed(context.str(R.string.err_file_missing))
     return try {
-        val uri = when (row.kind) {
-            "video" -> saveVideoToAlbum(context, file, "krea_${row.id}.${file.extension.ifBlank { "mp4" }}")
-            else -> saveToAlbum(context, file, "krea_${row.id}.png")
+        // 展示名带真实扩展名；gif 虽由视频节点产出，但本质是动图，按图片入 Pictures（MIME 才对）
+        val ext = file.extension.ifBlank { if (row.kind == "video") "mp4" else "png" }.lowercase()
+        val uri = if (row.kind == "video" && ext != "gif") {
+            saveVideoToAlbum(context, file, "krea_${row.id}.$ext")
+        } else {
+            saveToAlbum(context, file, "krea_${row.id}.$ext")
         }
         SaveOutcome.Saved(uri)
     } catch (e: Exception) {
@@ -144,7 +138,7 @@ fun shareImage(context: Context, file: File) {
 fun shareVideo(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(context, context.packageName + ".files", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = if (file.extension.lowercase() == "webm") "video/webm" else "video/mp4"
+        type = mimeForVideo(file.extension)
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

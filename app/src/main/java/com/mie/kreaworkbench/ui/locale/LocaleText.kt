@@ -52,6 +52,14 @@ fun Context.knownStage(stage: String): String {
     return str(R.string.stage_sampling, match.groupValues[1].toInt(), match.groupValues[2].toInt())
 }
 
+/** 解析引擎的「采样 k/n」阶段 token，返回 (k, n)；非采样阶段（含合成视频）返回 null。
+ *  进度行据此判断采样器总数：只有 n ≥ 2 才把采样器进度显示出来（round13 第 1 项）。 */
+fun parseSamplingStage(stage: String): Pair<Int, Int>? =
+    SAMPLING.matchEntire(stage.trim())?.let { it.groupValues[1].toInt() to it.groupValues[2].toInt() }
+
+/** 是否视频合成阶段 token（「合成视频」）。 */
+fun isVideoStage(stage: String): Boolean = stage.trim() == STAGE_VIDEO
+
 private const val STAGE_VIDEO = "合成视频"
 private val SAMPLING = Regex("采样 (\\d+)/(\\d+)")
 
@@ -69,7 +77,6 @@ private val KNOWN_COPY: Map<String, Int> = mapOf(
     "放大模型" to R.string.wf_upscale,
     "上传本次生成使用的参考图片。" to R.string.wf_help_image,
     "本版不支持视频输入。" to R.string.wf_help_video_unsupported,
-    "本工作流需要的模型；运行页可下拉换成本机已装的同类型模型。" to R.string.wf_help_model,
     "选「随机」每张图自动换种子；选「固定」使用上面的数值。" to R.string.wf_help_seed,
     "勾上「随机」则每张图各自随机；不勾则用固定数值。" to R.string.wf_help_seed_old,
     "可选预设尺寸，或填入自定义尺寸" to R.string.wf_help_size,

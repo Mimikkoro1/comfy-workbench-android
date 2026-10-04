@@ -1,26 +1,19 @@
 package com.mie.kreaworkbench.ui.screens.settings
 
-import android.os.Build
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,33 +22,71 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
-import com.mie.kreaworkbench.KreaApp
+import com.mie.kreaworkbench.BuildConfig
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.ui.components.formatBytes
 import com.mie.kreaworkbench.ui.locale.AppLocale
+import com.mie.kreaworkbench.ui.components.CacheManagementSheet
 import com.mie.kreaworkbench.ui.components.CardGroup
 import com.mie.kreaworkbench.ui.components.GroupedItem
-import com.mie.kreaworkbench.ui.components.KreaCard
-import com.mie.kreaworkbench.ui.components.PrimaryButton
 import com.mie.kreaworkbench.ui.components.ScreenHeader
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
+import com.mie.kreaworkbench.ui.nav.NavModel
+import com.mie.kreaworkbench.ui.nav.Overlay
+import com.mie.kreaworkbench.util.BatteryKeep
 
-/** 设置 tab 主页面：原「App 设置」二级页平铺到这里（direct10b），功能与存储不动。 */
+/**
+ * 设置 tab 主页（round13 5.2）：分组入口列表，条目进二级页——
+ * ComfyUI 服务器（地址/凭据/测试连接/最近地址）、后台运行、外观与语言、存储与缓存、关于；
+ * 每个入口副标题只写一行当前状态（r13fix 第 7 项），不写说明。原分组：
+ * 连接（地址/凭据/测试连接/最近地址）、后台运行（5.1 合并后的一行入口，副标题只写状态）、
+ * 外观与语言、存储与缓存（现成缓存管理弹层）、关于。各条目内容自旧首页原样搬入
+ * SettingsPages.kt / CacheManagementSheet，未新增设置项。
+ */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel()) {
-    val s by vm.settings.collectAsState()
+fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel(), nav: NavModel = viewModel()) {
     val context = LocalContext.current
-    var pendingLang by remember { mutableStateOf<String?>(null) }
-    val dynamic = Build.VERSION.SDK_INT >= 31
-    val count = if (dynamic) 5 else 4
-    val amoledIndex = if (dynamic) 3 else 2
-    val blurIndex = amoledIndex + 1
+    var showCache by remember { mutableStateOf(false) }
+    val s by vm.settings.collectAsState()
+
+    // 首页入口的「后台运行」副标题状态：从系统设置页返回后刷新
+    var ignoring by remember { mutableStateOf(BatteryKeep.isIgnoring(context)) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoring = BatteryKeep.isIgnoring(context)
+                vm.refreshUsage()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    // 各入口的一行状态
+    val notSet = stringResource(R.string.status_not_set)
+    val serverStatus = hostPort(s.serverUrl).ifBlank { notSet }
+    val themeLabel = when (s.themeMode) {
+        "light" -> stringResource(R.string.theme_light)
+        "dark" -> stringResource(R.string.theme_dark)
+        else -> stringResource(R.string.follow_system)
+    }
+    val tags = AppLocale.languageTagOrNull(context)
+        ?: AppCompatDelegate.getApplicationLocales().toLanguageTags()
+    val langLabel = when {
+        tags.startsWith("zh") -> "中文"
+        tags.startsWith("en") -> "English"
+        else -> stringResource(R.string.follow_system)
+    }
+    val cacheStatus = if (vm.usageLoaded.value) stringResource(R.string.status_cache, formatBytes(vm.usage.value)) else ""
+
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(stringResource(R.string.title_settings))
         Column(
@@ -64,159 +95,76 @@ fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel()) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp),
         ) {
-            KreaCard {
-                Text(stringResource(R.string.settings_server), fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = vm.url.value,
-                    onValueChange = { vm.url.value = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text("http://192.168.1.100:8188") },
-                )
-                Spacer(Modifier.height(10.dp))
-                val testing = stringResource(R.string.settings_testing)
-                val testLabel = stringResource(R.string.settings_test)
-                PrimaryButton(if (vm.busy.value) testing else testLabel, enabled = !vm.busy.value) {
-                    vm.test()
-                }
-                if (vm.ping.value.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(vm.ping.value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            CardGroup(stringResource(R.string.settings_appearance)) {
-                GroupedItem(
-                    index = 0,
-                    count = count,
-                    onClick = null,
-                    headline = { Text(stringResource(R.string.settings_theme)) },
-                    supporting = {
-                        Row {
-                            listOf(
-                                "light" to stringResource(R.string.theme_light),
-                                "dark" to stringResource(R.string.theme_dark),
-                                "system" to stringResource(R.string.follow_system),
-                            ).forEach { (id, label) ->
-                                FilterChip(
-                                    selected = s.themeMode == id,
-                                    onClick = { vm.theme(id) },
-                                    label = { Text(label) },
-                                    modifier = Modifier.padding(end = 8.dp, top = 4.dp),
-                                )
-                            }
-                        }
-                    },
-                )
-                GroupedItem(
-                    index = 1,
-                    count = count,
-                    onClick = null,
-                    headline = { Text(stringResource(R.string.settings_language)) },
-                    supporting = {
-                        val tags = AppLocale.languageTagOrNull(context)
-                            ?: AppCompatDelegate.getApplicationLocales().toLanguageTags()
-                        val selected = when {
-                            tags.startsWith("zh") -> "zh"
-                            tags.startsWith("en") -> "en"
-                            else -> "system"
-                        }
-                        Row {
-                            listOf(
-                                "system" to stringResource(R.string.follow_system),
-                                "zh" to "中文",
-                                "en" to "English",
-                            ).forEach { (id, label) ->
-                                FilterChip(
-                                    selected = selected == id,
-                                    onClick = { if (id != selected) pendingLang = id },
-                                    label = { Text(label) },
-                                    modifier = Modifier.padding(end = 8.dp, top = 4.dp),
-                                )
-                            }
-                        }
-                    },
-                )
-                if (dynamic) {
-                    GroupedItem(
-                        index = 2,
-                        count = count,
-                        onClick = { vm.dynamicColor(!s.dynamicColor) },
-                        headline = { Text(stringResource(R.string.settings_dynamic)) },
-                        supporting = { Text(stringResource(R.string.settings_dynamic_desc)) },
-                        trailing = {
-                            Switch(checked = s.dynamicColor, onCheckedChange = { vm.dynamicColor(it) })
-                        },
-                    )
-                }
-                GroupedItem(
-                    index = amoledIndex,
-                    count = count,
-                    onClick = { vm.amoled(!s.amoled) },
-                    headline = { Text(stringResource(R.string.settings_amoled)) },
-                    supporting = { Text(stringResource(R.string.settings_amoled_desc)) },
-                    trailing = {
-                        Switch(checked = s.amoled, onCheckedChange = { vm.amoled(it) })
-                    },
-                )
-                GroupedItem(
-                    index = blurIndex,
-                    count = count,
-                    onClick = { vm.blur(!s.blurEnabled) },
-                    headline = { Text(stringResource(R.string.settings_blur)) },
-                    supporting = { Text(stringResource(R.string.settings_blur_desc)) },
-                    trailing = {
-                        Switch(checked = s.blurEnabled, onCheckedChange = { vm.blur(it) })
-                    },
-                )
-            }
-            Spacer(Modifier.height(16.dp))
-            CardGroup(stringResource(R.string.settings_notifications)) {
-                GroupedItem(
-                    index = 0,
-                    count = 1,
-                    onClick = { vm.notify(!s.notifyEnabled) },
-                    headline = { Text(stringResource(R.string.settings_notify_done)) },
-                    trailing = {
-                        Switch(checked = s.notifyEnabled, onCheckedChange = { vm.notify(it) })
-                    },
-                )
-            }
-            Spacer(Modifier.height(16.dp))
             CardGroup {
                 GroupedItem(
                     index = 0,
-                    count = 1,
+                    count = 5,
+                    onClick = { nav.push(Overlay.SettingsConnection) },
+                    headline = { Text(stringResource(R.string.group_connection)) },
+                    supporting = { StatusText(serverStatus) },
+                    trailing = { Chevron() },
+                )
+                GroupedItem(
+                    index = 1,
+                    count = 5,
+                    onClick = { nav.push(Overlay.SettingsBackground) },
+                    headline = { Text(stringResource(R.string.settings_battery)) },
+                    supporting = {
+                        Text(
+                            stringResource(if (ignoring) R.string.battery_status_on else R.string.battery_status_off),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    trailing = { Chevron() },
+                )
+                GroupedItem(
+                    index = 2,
+                    count = 5,
+                    onClick = { nav.push(Overlay.SettingsAppearance) },
+                    headline = { Text(stringResource(R.string.group_look)) },
+                    supporting = { StatusText("$themeLabel · $langLabel") },
+                    trailing = { Chevron() },
+                )
+                GroupedItem(
+                    index = 3,
+                    count = 5,
+                    onClick = { showCache = true },
+                    headline = { Text(stringResource(R.string.group_storage)) },
+                    supporting = if (cacheStatus.isNotEmpty()) {
+                        { StatusText(cacheStatus) }
+                    } else {
+                        null
+                    },
+                    trailing = { Chevron() },
+                )
+                GroupedItem(
+                    index = 4,
+                    count = 5,
                     onClick = onAbout,
                     headline = { Text(stringResource(R.string.title_about)) },
-                    trailing = {
-                        Icon(Lucide.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
+                    supporting = { StatusText("v${BuildConfig.VERSION_NAME}") },
+                    trailing = { Chevron() },
                 )
             }
             Spacer(Modifier.height(24.dp + LocalExtraBottom.current))
         }
     }
-    val chosen = pendingLang
-    if (chosen != null) {
-        val active = (context.applicationContext as KreaApp).container.engine.hasActive()
-        val base = stringResource(R.string.language_restart_body)
-        val tasks = stringResource(R.string.language_restart_tasks)
-        val body = if (active) "$base\n$tasks" else base
-        AlertDialog(
-            onDismissRequest = { pendingLang = null },
-            title = { Text(stringResource(R.string.language_restart_title)) },
-            text = { Text(body) },
-            confirmButton = {
-                TextButton(onClick = {
-                    AppLocale.persist(context, chosen)
-                    AppLocale.restart(context)
-                }) { Text(stringResource(R.string.language_restart_confirm)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingLang = null }) { Text(stringResource(R.string.action_cancel)) }
-            },
-        )
+
+    if (showCache) {
+        CacheManagementSheet(onDismiss = { showCache = false })
     }
+}
+
+@Composable
+private fun StatusText(text: String) {
+    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+}
+
+/** 地址只留 host:port（去掉 scheme、路径与 user@）。 */
+private fun hostPort(url: String): String =
+    url.trim().substringAfter("://").substringBefore('/').substringBefore('?').substringAfterLast('@')
+
+@Composable
+private fun Chevron() {
+    Icon(Lucide.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
 }

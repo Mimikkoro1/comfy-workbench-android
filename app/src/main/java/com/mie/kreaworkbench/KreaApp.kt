@@ -7,7 +7,9 @@ import androidx.core.content.ContextCompat
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.mie.kreaworkbench.data.CacheManager
+import com.mie.kreaworkbench.data.api.RequestAuth
 import com.mie.kreaworkbench.data.api.Transfer
+import com.mie.kreaworkbench.data.api.fileClient
 import com.mie.kreaworkbench.data.comfy.ComfyApi
 import com.mie.kreaworkbench.data.db.GalleryDb
 import com.mie.kreaworkbench.data.library.PromptLibraryRepo
@@ -16,6 +18,7 @@ import com.mie.kreaworkbench.data.workflows.WorkflowStore
 import com.mie.kreaworkbench.service.GenerationEngine
 import com.mie.kreaworkbench.service.GenerationService
 import com.mie.kreaworkbench.service.ensureNotifyChannels
+import com.mie.kreaworkbench.service.scheduleResumeWork
 import com.mie.kreaworkbench.ui.locale.AppLocale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,8 +31,12 @@ class KreaApp : Application(), ImageLoaderFactory {
             private set
     }
 
+    /** 全局 Coil 加载器也挂 Auth 拦截器：任何经 /view 的远程图片拉取都不会 401（本地缩略图不受影响）。 */
     override fun newImageLoader(): ImageLoader =
-        ImageLoader.Builder(this).crossfade(true).build()
+        ImageLoader.Builder(this)
+            .crossfade(true)
+            .okHttpClient { fileClient(container.auth.interceptor) }
+            .build()
 
     lateinit var container: AppContainer
         private set
@@ -46,10 +53,12 @@ class KreaApp : Application(), ImageLoaderFactory {
         container = AppContainer(this)
         ensureNotifyChannels(this)
         container.engine.watchNetwork()
+        container.auth.start()
+        scheduleResumeWork(this)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope.launch {
             try {
-                container.settings.migrateServerUrl()
+                container.settings.migrateLegacyServerUrl()
             } catch (_: Exception) {
             }
         }
@@ -87,10 +96,12 @@ class AppContainer(context: Context) {
     private val app = context.applicationContext
     val settings = SettingsStore(app)
     val db = GalleryDb(app)
-    val api = ComfyApi(app, settings, db)
+    // auth 先建：api/transfer/progress 的 OkHttp 客户端都要挂它的 Basic Auth 拦截器
+    val auth = RequestAuth(settings)
+    val api = ComfyApi(app, settings, db, auth.interceptor)
     val library = PromptLibraryRepo(app)
     val workflowStore = WorkflowStore(app)
-    val transfer = Transfer(settings)
+    val transfer = Transfer(settings, auth.interceptor)
     val cache = CacheManager(app, db, settings)
     val engine = GenerationEngine(app, db, api, transfer, settings, cache)
 }

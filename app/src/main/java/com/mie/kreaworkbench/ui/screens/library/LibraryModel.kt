@@ -190,6 +190,26 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { c.workflowStore.rename(id, name) }
     }
 
+    /** 库重命名（round13 第 3 项）。ok=false（库已删/名为空）时静默，UI 已先行校验。 */
+    fun renameLibrary(id: String, name: String) {
+        viewModelScope.launch { c.library.renameLibrary(id, name) }
+    }
+
+    /** 某库的分组列表（名 → 条数），供「重命名分组」选择（round13 第 3 项）。 */
+    suspend fun categoriesOf(libId: String): List<Pair<String, Int>> = c.library.categoriesOf(libId)
+
+    /** 分组重命名（round13 第 3 项）：changed 经回调给 UI 弹提示；-1 = 失败。 */
+    fun renameCategory(libId: String, old: String, new: String, onDone: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val changed = try {
+                c.library.renameCategory(libId, old, new)
+            } catch (e: Exception) {
+                -1
+            }
+            onDone(changed)
+        }
+    }
+
     fun deleteWorkflow(id: String) {
         viewModelScope.launch {
             if (c.workflowStore.delete(id)) {

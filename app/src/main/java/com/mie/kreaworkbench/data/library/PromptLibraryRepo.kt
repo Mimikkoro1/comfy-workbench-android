@@ -205,6 +205,79 @@ class PromptLibraryRepo(private val ctx: Context) {
     }
 
     /**
+     * 重命名库（round13 第 3 项）：只改索引里的 name。库的全部引用（currentId、抽卡筛选、
+     * 生成页绑定）都走 id，改名不需要任何迁移。id 不存在或新名为空返回 false；重名拦截在 UI 层。
+     */
+    suspend fun renameLibrary(id: String, name: String): Boolean = locked {
+        ensureLoadedLocked()
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return@locked false
+        val libs = _libraries.value
+        if (libs.none { it.id == id }) return@locked false
+        val updated = libs.map { if (it.id == id) it.copy(name = trimmed) else it }
+        writeIndexLocked(updated, _currentId.value)
+        _libraries.value = updated
+        true
+    }
+
+    /** 某库的分组列表（名 → 条数），按条数降序；供「重命名分组」的选择列表（round13 第 3 项）。 */
+    suspend fun categoriesOf(libId: String): List<Pair<String, Int>> = locked {
+        ensureLoadedLocked()
+        if (_libraries.value.none { it.id == libId }) return@locked emptyList()
+        val entries = parseLibFile(libId) ?: return@locked emptyList()
+        val counts = LinkedHashMap<String, Int>()
+        entries.forEach {
+            val c = it.category.ifBlank { UNCAT }
+            counts[c] = (counts[c] ?: 0) + 1
+        }
+        counts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .map { it.key to it.value }
+    }
+
+    /**
+     * 重命名分组（round13 第 3 项）：把该库所有 category==old 的条目改成 new，物理重写库文件；
+     * 是当前库则强制刷新抽卡缓存（meta()/draw() 读的是缓存）。返回改到的条数（0=没有条目属于
+     * 该分组），库不存在/参数为空返回 -1。new 与既有分组同名即合并，重名提示在 UI 层。
+     */
+    suspend fun renameCategory(libId: String, old: String, new: String): Int = locked {
+        ensureLoadedLocked()
+        val target = new.trim()
+        if (_libraries.value.none { it.id == libId } || old.isBlank() || target.isBlank()) return@locked -1
+        val f = File(dir, "$libId.json")
+        if (!f.isFile) return@locked -1
+        val entries = parseLibFile(libId) ?: return@locked -1
+        var changed = 0
+        val arr = JSONArray()
+        for (e in entries) {
+            val cat = if (e.category == old) {
+                changed++
+                target
+            } else {
+                e.category
+            }
+            val tags = JSONArray()
+            e.tags.forEach { tags.put(it) }
+            arr.put(
+                JSONObject()
+                    .put("id", e.id)
+                    .put("prompt", e.prompt)
+                    .put("title", e.title)
+                    .put("category", cat)
+                    .put("tags", tags),
+            )
+        }
+        if (changed > 0) {
+            f.writeText(arr.toString())
+            if (_currentId.value == libId) {
+                cachedForId = null
+                refreshCacheLocked(libId)
+            }
+        }
+        changed
+    }
+
+    /**
      * 删除库；删的是当前库就自动切到最近导入的那个（没有库了 current 置空），不会崩。
      */
     suspend fun delete(id: String) = locked {

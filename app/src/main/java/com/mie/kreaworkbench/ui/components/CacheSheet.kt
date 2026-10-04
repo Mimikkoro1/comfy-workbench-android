@@ -52,7 +52,7 @@ fun CacheManagementSheet(onDismiss: () -> Unit, vm: AppSettingsModel = viewModel
             }
             val cap = if (s.cacheLimitGb <= 0) unlimited else "${s.cacheLimitGb} GB"
             Text(
-                stringResource(R.string.cache_used, formatBytes(vm.usage.longValue), cap),
+                stringResource(R.string.cache_used, formatBytes(vm.usage.value), cap),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),

@@ -17,7 +17,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,6 +33,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mie.kreaworkbench.BuildConfig
+import com.mie.kreaworkbench.KreaApp
+import com.mie.kreaworkbench.data.update.UpdateChecker
+import com.mie.kreaworkbench.data.update.UpdateResult
+import com.mie.kreaworkbench.ui.components.LocalToaster
+import com.mie.kreaworkbench.ui.components.notify
+import kotlinx.coroutines.launch
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.components.CardGroup
 import com.mie.kreaworkbench.ui.components.GroupedItem
@@ -54,6 +64,9 @@ fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val name = stringResource(R.string.app_name)
     val scheme = MaterialTheme.colorScheme
+    val toaster = LocalToaster.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
     LargeBarScaffold(title = stringResource(R.string.title_about), onBack = onBack) { padding ->
         Column(
             Modifier
@@ -92,14 +105,39 @@ fun AboutScreen(onBack: () -> Unit) {
             CardGroup {
                 GroupedItem(
                     index = 0,
-                    count = 2,
+                    count = 3,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_version)) },
                     supporting = { Text("${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}") },
                 )
+                // round14：手动检查更新（无视 24h 间隔与「忽略此版本」）
                 GroupedItem(
                     index = 1,
-                    count = 2,
+                    count = 3,
+                    onClick = {
+                        if (!checking) {
+                            checking = true
+                            scope.launch {
+                                val r = UpdateChecker.manualCheck((context.applicationContext as KreaApp).container.settings)
+                                checking = false
+                                when (r) {
+                                    is UpdateResult.Available -> UpdateChecker.pending.value = r.info
+                                    UpdateResult.UpToDate -> notify(toaster, context, context.getString(R.string.update_latest))
+                                    is UpdateResult.Failed -> notify(toaster, context, context.getString(R.string.update_failed, r.reason))
+                                }
+                            }
+                        }
+                    },
+                    headline = { Text(stringResource(R.string.update_check)) },
+                    supporting = if (checking) {
+                        { Text(stringResource(R.string.update_checking)) }
+                    } else {
+                        null
+                    },
+                )
+                GroupedItem(
+                    index = 2,
+                    count = 3,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_system)) },
                     supporting = {

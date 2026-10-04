@@ -1,11 +1,13 @@
 package com.mie.kreaworkbench.ui.screens.settings
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.api.ApiException
+import com.mie.kreaworkbench.data.settings.ServerHistoryEntry
 import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.ui.locale.str
 import kotlinx.coroutines.Dispatchers
@@ -18,10 +20,18 @@ import kotlinx.coroutines.withTimeout
 class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as KreaApp).container
     val settings = c.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UserSettings())
-    var url = androidx.compose.runtime.mutableStateOf("")
-    var ping = androidx.compose.runtime.mutableStateOf("")
-    var busy = androidx.compose.runtime.mutableStateOf(false)
-    var usage = androidx.compose.runtime.mutableLongStateOf(0L)
+
+    var url = mutableStateOf("")
+    var user = mutableStateOf("")
+    var pass = mutableStateOf("")
+    var showPass = mutableStateOf(false)
+    var ping = mutableStateOf("")
+    var busy = mutableStateOf(false)
+    /** 测试连接遇 401 → 展开账号密码框并提示「需要账号密码」。 */
+    var authNeeded = mutableStateOf(false)
+    var usage = mutableStateOf(0L)
+    /** usage 是否已算出（设置首页「存储与缓存」状态行算出前不显示）。 */
+    var usageLoaded = mutableStateOf(false)
     private var seeded = false
 
     init {
@@ -29,10 +39,33 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
             val s = c.settings.current()
             if (!seeded) {
                 url.value = s.serverUrl
+                user.value = s.serverUser
+                pass.value = s.serverPass
                 seeded = true
             }
-            usage.longValue = withContext(Dispatchers.IO) { c.cache.usedBytes() }
+            usage.value = withContext(Dispatchers.IO) { c.cache.usedBytes() }
+            usageLoaded.value = true
         }
+    }
+
+    private suspend fun saveNow() = c.settings.update {
+        it.copy(
+            serverUrl = url.value.trim(),
+            serverUser = user.value.trim(),
+            serverPass = pass.value,
+        )
+    }
+
+    fun save() = viewModelScope.launch { saveNow() }
+
+    /** 从「最近地址」历史回填：地址+各自凭据一起填，立即落库。 */
+    fun applyHistory(entry: ServerHistoryEntry) {
+        url.value = entry.url
+        user.value = entry.user
+        pass.value = entry.pass
+        ping.value = ""
+        authNeeded.value = false
+        viewModelScope.launch { saveNow() }
     }
 
     fun test() {
@@ -47,16 +80,24 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
             ping.value = app.str(R.string.ping_connecting)
             try {
                 val r = withTimeout(65_000L) {
-                    c.settings.update { it.copy(serverUrl = target) }
-                    c.api.ping(target)
+                    saveNow()
+                    c.api.ping(target, user.value.trim(), pass.value)
                 }
                 ping.value = app.str(R.string.ping_latency, r.workbenchVersion, r.latencyMs)
+                authNeeded.value = false
+                // 连通过才算「最近用过的地址」，进历史（防抖输入打到一半的值不会被记）
+                c.settings.rememberServer(target, user.value.trim(), pass.value)
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 ping.value = app.str(R.string.ping_timeout)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: ApiException) {
-                ping.value = e.message ?: e.javaClass.simpleName
+                if (e.auth) {
+                    ping.value = app.str(R.string.auth_needed)
+                    authNeeded.value = true
+                } else {
+                    ping.value = e.message ?: e.javaClass.simpleName
+                }
             } catch (e: Exception) {
                 ping.value = e.message ?: e.javaClass.simpleName
             } finally {
@@ -72,7 +113,7 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     fun blur(on: Boolean) = viewModelScope.launch { c.settings.update { it.copy(blurEnabled = on) } }
     fun cache(gb: Int) = viewModelScope.launch {
         c.settings.update { it.copy(cacheLimitGb = gb) }
-        usage.longValue = withContext(Dispatchers.IO) {
+        usage.value = withContext(Dispatchers.IO) {
             c.cache.enforce()
             c.cache.usedBytes()
         }
@@ -81,13 +122,14 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     fun clear(onDone: () -> Unit) = viewModelScope.launch {
         withContext(Dispatchers.IO) { c.cache.clearAll() }
         c.engine.revision.value = c.engine.revision.value + 1
-        usage.longValue = 0
+        usage.value = 0
         onDone()
     }
 
     fun refreshUsage() {
         viewModelScope.launch {
-            usage.longValue = withContext(Dispatchers.IO) { c.cache.usedBytes() }
+            usage.value = withContext(Dispatchers.IO) { c.cache.usedBytes() }
+            usageLoaded.value = true
         }
     }
 }

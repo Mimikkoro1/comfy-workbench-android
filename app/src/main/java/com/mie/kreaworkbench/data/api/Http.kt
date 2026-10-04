@@ -8,6 +8,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,7 +24,8 @@ import kotlin.coroutines.resumeWithException
 
 val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
-fun jsonClient(): OkHttpClient = OkHttpClient.Builder()
+/** auth = ServerRouter.interceptor：对当前生效线路统一加 Basic Auth（HTTP/WS/上传下载共用）。 */
+fun jsonClient(auth: Interceptor? = null): OkHttpClient = OkHttpClient.Builder()
     .proxy(Proxy.NO_PROXY)
     .connectTimeout(10, TimeUnit.SECONDS)
     .readTimeout(30, TimeUnit.SECONDS)
@@ -30,20 +33,44 @@ fun jsonClient(): OkHttpClient = OkHttpClient.Builder()
     // 整次调用的总时长上限：兜底任何阶段卡死（连接挂起、响应不到）都有确定的失败时刻
     .callTimeout(60, TimeUnit.SECONDS)
     .retryOnConnectionFailure(false)
+    .apply { if (auth != null) addInterceptor(auth) }
     .build()
 
-fun fileClient(): OkHttpClient = OkHttpClient.Builder()
+fun fileClient(auth: Interceptor? = null): OkHttpClient = OkHttpClient.Builder()
     .proxy(Proxy.NO_PROXY)
     .connectTimeout(10, TimeUnit.SECONDS)
     .readTimeout(60, TimeUnit.SECONDS)
     .writeTimeout(120, TimeUnit.SECONDS)
     .retryOnConnectionFailure(false)
+    .apply { if (auth != null) addInterceptor(auth) }
     .build()
 
-fun trimBase(url: String): String = url.trim().trimEnd('/')
+/**
+ * 清洗配置地址：去首尾斜杠、补 http scheme、剥掉混入的空白/控制字符。
+ * 最终用 HttpUrl 强校验——解析不过（输入中途的脏值、手滑字符）返回 ""，
+ * 让所有调用方走「地址未配置」的优雅失败路径，而不是 Request.Builder.url() 抛
+ * IllegalArgumentException 炸掉调用协程（ComfyProgress 的独立 scope 一炸就是整个进程）。
+ */
+fun trimBase(url: String): String {
+    val cleaned = url.trim().trimEnd('/').let { s ->
+        if (s.isEmpty()) s else buildString {
+            for (c in s) if (!c.isWhitespace() && !c.isISOControl()) append(c)
+        }
+    }
+    if (cleaned.isBlank()) return ""
+    val withScheme = if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+        cleaned
+    } else {
+        "http://$cleaned"
+    }
+    return if (withScheme.toHttpUrlOrNull() != null) withScheme else ""
+}
 
-suspend fun SettingsStore.baseUrl(): String = trimBase(current().serverUrl).ifBlank {
-    throw ApiException(KreaApp.instance.str(R.string.ping_need_server))
+/** 配置的 ComfyUI 地址；空 = 未配置。 */
+suspend fun SettingsStore.baseUrl(): String {
+    val u = trimBase(current().serverUrl)
+    if (u.isBlank()) throw ApiException(KreaApp.instance.str(R.string.ping_need_server))
+    return u
 }
 
 private val BACKOFF = longArrayOf(0L, 1000L, 3000L, 6000L)
@@ -104,11 +131,13 @@ private suspend fun OkHttpClient.awaitText(build: () -> Request): Pair<Int, Stri
 private fun parseJson(code: Int, text: String, idempotent: Boolean, attempt: Int, attempts: Int): JSONObject {
     val json = if (text.trimStart().startsWith("{")) JSONObject(text) else JSONObject()
     if (code !in 200..299) {
+        // 401 是凭据缺失/错误，不是网络问题：明确报错，绝不进重试循环
+        if (code == 401) throw authError()
         val err = errorText(json) ?: httpFallback(code)
         if (idempotent && code >= 500 && attempt < attempts - 1) {
-            throw ApiException(err, network = true)
+            throw ApiException(err, network = true, code = code)
         }
-        throw ApiException(err, network = code >= 500)
+        throw ApiException(err, network = code >= 500, code = code)
     }
     if (json.has("ok") && !json.optBoolean("ok")) {
         throw ApiException(json.optString("error", KreaApp.instance.str(R.string.err_request_failed)))
@@ -146,6 +175,12 @@ private fun errorText(json: JSONObject): String? {
     return json.optString("error").ifBlank { null }
 }
 
-fun httpFallback(code: Int): String = KreaApp.instance.str(R.string.err_request_code, code)
+fun httpFallback(code: Int): String = if (code == 401) {
+    KreaApp.instance.str(R.string.err_auth_failed)
+} else {
+    KreaApp.instance.str(R.string.err_request_code, code)
+}
+
+fun authError(): ApiException = ApiException(KreaApp.instance.str(R.string.err_auth_failed), network = false, auth = true)
 
 fun jsonBody(obj: JSONObject) = obj.toString().toRequestBody(JSON_MEDIA)
