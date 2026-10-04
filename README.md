@@ -14,10 +14,12 @@
 - **自定义工作流导入**:导入任意 API 格式的工作流 JSON,把参数映射成手机上的操作面板(示例见 `docs/example-workflows/`)
 - **提示词库**:分类取词、随机抽卡、保存与编辑,攒自己的提示词资产
 - **画廊**:图片 / 视频统一浏览,保存到系统相册,支持放大查看与视频播放
-- **后台生成**:前台服务保活,锁屏 / 切走后生成不中断,进度通知栏可见
+- **后台生成与下载**:生成和结果下载都由前台服务执行,锁屏 / 切走后照样跑完并存入 App 图库,进度通知栏可见
+- **远程访问**:同一个地址框填内网或外网地址;外网地址可配账号密码(HTTP Basic Auth,适合放在 Caddy / Nginx 等反向代理后面),遇到 401 会自动展开账号密码框
 - **队列管理**:查看队列、中断当前任务
 - **现代化 UI**:Material 3 + 毛玻璃质感,单手操作友好
 - **中英双语**:界面支持中文与英文,默认跟随系统语言,也可在「设置」中手动切换
+- **更新检查**:每天最多一次向 GitHub 查询新版本,也可在「关于」里手动检查;不自动下载,不收集任何数据
 
 ## 截图
 
@@ -40,6 +42,7 @@
 
 - **Tailscale**(推荐):零配置组网,手机和家里机器组虚拟局域网,填 Tailscale IP 即可
 - **frp / 花生壳等端口转发**:公网 IP:端口直连,建议自行套 HTTPS 或用强密码保护 ComfyUI
+- **反向代理 + 账号密码**:用 Caddy / Nginx 等把 ComfyUI 发布出去(建议 HTTPS)并开启 Basic Auth,在应用里填外网地址和账号密码即可;密码加密保存在手机本地
 
 > 安全提示:应用与 ComfyUI 之间的通信是 HTTP 明文,这是局域网场景的常见取舍。请勿在不可信的公共网络中直连,公网场景务必经由 VPN / 隧道。
 
@@ -92,10 +95,12 @@ gradlew.bat assembleRelease
 
 - Import any API-format workflow JSON (examples for t2i / i2i / Wan2.2 i2v / Florence-2 image-to-prompt in `docs/example-workflows/`)
 - Requires Android 8.0+; the Release APK is a universal build (arm64-v8a / armeabi-v7a / x86 / x86_64)
-- Real-time progress, foreground-service background generation, queue & interrupt
+- Real-time progress; generation and result download run in a foreground service, so they finish even with the screen locked; queue & interrupt
+- Remote access: one address field for LAN or remote URLs; HTTP Basic Auth supported (e.g. behind a Caddy / Nginx reverse proxy), and the username/password fields expand automatically on 401
+- Update check: asks GitHub for a new release at most once a day, or manually from About; no auto-download, no data collected
 - Chinese and English UI: follows the system language by default, switchable in Settings
 - Example API-format workflows live in `docs/example-workflows/`
-- Designed for LAN use; for remote access pair it with Tailscale / frp (traffic is plain HTTP, use a tunnel on untrusted networks)
+- Designed for LAN use; for remote access pair it with Tailscale / frp, or a reverse proxy with HTTPS + Basic Auth (plain HTTP traffic should go through a tunnel on untrusted networks)
 
 ### Screenshots
 
