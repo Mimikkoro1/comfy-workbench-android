@@ -82,6 +82,10 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Palette
 import com.composables.icons.lucide.Share2
 import com.composables.icons.lucide.Trash2
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import org.json.JSONObject
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
@@ -431,8 +435,13 @@ private fun InfoSheet(row: ImageRow, onClose: () -> Unit) {
                 Text(stringResource(R.string.seed_value, row.seed), color = ink)
                 Text("${row.width} × ${row.height}", color = ink)
             }
+            // 工作流名：新任务 paramsJson 带 workflow_name；老记录按 workflow_id 去工作流库查当前名字；
+            // 都没有（已删除/非导入工作流）再退回原来的类别标签
+            val workflowName by produceState<String?>(null, row.id) {
+                value = workflowNameOf(row, context)
+            }
             Text(
-                when {
+                workflowName ?: when {
                     row.kind == "video" -> stringResource(R.string.kind_video)
                     row.kind == "text" -> stringResource(R.string.label_text)
                     row.mode == "i2i" -> stringResource(R.string.mode_i2i)
@@ -441,7 +450,44 @@ private fun InfoSheet(row: ImageRow, onClose: () -> Unit) {
                 },
                 color = ink,
             )
+            val fileInfo by produceState<Pair<Long, Long>?>(null, row.id) {
+                value = withContext(Dispatchers.IO) {
+                    val f = row.localPath.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.exists() }
+                    val size = if (row.kind == "text") 0L else row.sizeBytes.takeIf { it > 0 } ?: f?.length() ?: 0L
+                    val time = row.createdAt.takeIf { it > 0 } ?: f?.lastModified() ?: 0L
+                    size to time
+                }
+            }
+            fileInfo?.let { (size, time) ->
+                if (size > 0) Text(stringResource(R.string.info_file_size, formatInfoSize(size)), color = ink)
+                if (time > 0) {
+                    val formatted = remember(time) { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(time)) }
+                    Text(stringResource(R.string.info_created_at, formatted), color = ink)
+                }
+            }
             TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) }
         }
     }
+}
+
+private suspend fun workflowNameOf(row: ImageRow, context: Context): String? {
+    val params = try {
+        JSONObject(row.paramsJson)
+    } catch (_: Exception) {
+        return null
+    }
+    params.optString("workflow_name").takeIf { it.isNotBlank() }?.let { return it }
+    val id = params.optString("workflow_id").takeIf { it.isNotBlank() } ?: return null
+    return try {
+        (context.applicationContext as KreaApp).container.workflowStore.labelOf(id)?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun formatInfoSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+    else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
 }

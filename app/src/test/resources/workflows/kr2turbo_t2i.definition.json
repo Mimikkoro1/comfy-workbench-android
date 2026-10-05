@@ -1,0 +1,146 @@
+{
+  "workflow_file": "kr2turbo_t2i.workflow.json",
+  "display_name": "Kr2 Turbo 文生图",
+  "category": "image",
+  "group": "图像",
+  "output_kind": "image",
+  "kwb_output_node": "16",
+  "user_facing_inputs": [
+    {
+      "node_id": "7",
+      "field": "text",
+      "label": "提示词",
+      "type": "prompt_pool",
+      "tier": "basic",
+      "default": "placeholder prompt: a person standing by a window, soft light",
+      "max_chars": 2000,
+      "help": "描述希望生成的内容、风格与构图；可用 🎲 从提示词库抽卡，下方的分类/包含/排除筛选对所有提示词字段共用。"
+    },
+    {
+      "node_id": "9",
+      "field": "sizes",
+      "label": "输出尺寸",
+      "type": "image_sizes",
+      "tier": "basic",
+      "default": "1152x1728",
+      "allow_custom": true,
+      "min_width": 256,
+      "max_width": 2560,
+      "min_height": 256,
+      "max_height": 2560,
+      "presets": [
+        { "label": "1152×1728 · 2:3 · 全身（默认）", "value": "1152x1728" },
+        { "label": "1024×1536 · 2:3 · 人像", "value": "1024x1536" },
+        { "label": "1216×1728 · 5:7 · 人像高清", "value": "1216x1728" },
+        { "label": "1088×1920 · 9:16 · 竖屏", "value": "1088x1920" },
+        { "label": "1440×2560 · 9:16 · 竖屏高清", "value": "1440x2560" },
+        { "label": "1152×2560 · 9:20 · 手机壁纸", "value": "1152x2560" },
+        { "label": "1536×1536 · 1:1 · 方图", "value": "1536x1536" },
+        { "label": "1536×1024 · 3:2 · 横版", "value": "1536x1024" },
+        { "label": "1728×1216 · 7:5 · 横版高清", "value": "1728x1216" },
+        { "label": "1536×864 · 16:9 · 横屏", "value": "1536x864" },
+        { "label": "1728×972 · 16:9 · 横屏高清", "value": "1728x972" }
+      ],
+      "help": "勾选一个或多个预设尺寸，或填自定义宽×高；每个选中的尺寸各出一批图。不勾则用工作流当前尺寸。"
+    },
+    {
+      "node_id": "12",
+      "field": "seed",
+      "label": "种子",
+      "type": "int_random",
+      "tier": "basic",
+      "default": 80913082042543,
+      "random_default": true,
+      "min": 0,
+      "max": 9223372036854775807,
+      "step": 1,
+      "help": "勾上「随机」则每张图各自随机；不勾则用固定数值（固定时同一批内每张图 = 基础值 + 图序号）。"
+    },
+    {
+      "node_id": "2",
+      "field": "unet_name",
+      "label": "扩散模型",
+      "type": "model",
+      "tier": "model",
+      "default": "Krea2\\Krea2Turbo_FP8.safetensors",
+      "help": "本工作流需要的模型；设置页可下拉换成本机已装的同类型模型（连着 ComfyUI 时实时列出）。"
+    },
+    {
+      "node_id": "4",
+      "field": "shift",
+      "label": "Shift",
+      "type": "float",
+      "tier": "advanced",
+      "default": 3,
+      "min": 0,
+      "max": 10,
+      "step": 0.05,
+      "help": "ModelSamplingAuraFlow 的 shift：影响对比与构图（模板默认 3）。"
+    },
+    {
+      "node_id": "12",
+      "field": "steps",
+      "label": "步数",
+      "type": "int",
+      "tier": "advanced",
+      "default": 8,
+      "min": 1,
+      "max": 100,
+      "step": 1,
+      "help": "采样步数；Turbo 模型 8 步左右即可，调高更慢。"
+    },
+    {
+      "node_id": "12",
+      "field": "cfg",
+      "label": "CFG",
+      "type": "float",
+      "tier": "advanced",
+      "default": 1,
+      "min": 0,
+      "max": 10,
+      "step": 0.05,
+      "help": "提示词强度；Turbo 模型保持 1（配合 ConditioningZeroOut）。"
+    },
+    {
+      "node_id": "12",
+      "field": "sampler_name",
+      "label": "采样器",
+      "type": "select",
+      "tier": "advanced",
+      "default": "euler",
+      "kwb_combo": "KSampler|sampler_name",
+      "choices": [
+        "euler",
+        "euler_ancestral",
+        "heun",
+        "dpmpp_2m",
+        "dpmpp_2m_sde",
+        "dpmpp_sde",
+        "res_multistep",
+        "uni_pc",
+        "lcm",
+        "ddim"
+      ],
+      "help": "采样算法；连着 ComfyUI 时实时列出本机可用采样器（kwb_combo），断网用这份列表兜底。"
+    },
+    {
+      "node_id": "12",
+      "field": "scheduler",
+      "label": "调度器",
+      "type": "select",
+      "tier": "advanced",
+      "default": "simple",
+      "kwb_combo": "KSampler|scheduler",
+      "choices": [
+        "simple",
+        "normal",
+        "karras",
+        "exponential",
+        "sgm_uniform",
+        "beta",
+        "linear_quadratic"
+      ],
+      "help": "采样调度；连着 ComfyUI 时实时列出本机可用调度器（kwb_combo），断网用这份列表兜底。"
+    }
+  ]
+}

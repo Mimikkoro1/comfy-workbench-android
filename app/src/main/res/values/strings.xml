@@ -399,13 +399,6 @@
     <string name="wf_uncat">Uncategorized</string>
     <string name="wf_imported">Imported workflow</string>
     <string name="wf_import_lib">Imported prompt library</string>
-    <string name="size_full">1152×1728 · 2:3 full body (default)</string>
-    <string name="size_portrait">1024×1536 · 2:3 portrait</string>
-    <string name="size_portrait_hd">1216×1728 · portrait HD</string>
-    <string name="size_wallpaper">1152×2560 · phone wallpaper</string>
-    <string name="size_wide">1728×972 · 16:9 widescreen</string>
-    <string name="size_land">1536×1024 · 3:2 landscape</string>
-    <string name="size_land_hd">1728×1216 · landscape HD</string>
     <plurals name="image_total">
         <item quantity="one">%d image</item>
         <item quantity="other">%d images</item>
@@ -466,5 +459,18 @@
     <string name="update_ignore">Skip this version</string>
     <string name="update_later">Later</string>
     <string name="update_no_notes">(No release notes)</string>
+    <string name="info_file_size">File size: %1$s</string>
+    <string name="info_created_at">Created: %1$s</string>
+    <string name="size_full">1152×1728 · 2:3 · full body (default)</string>
+    <string name="size_portrait">1024×1536 · 2:3 · portrait photo</string>
+    <string name="size_portrait_hd">1216×1728 · 5:7 · portrait photo HD</string>
+    <string name="size_vertical">1088×1920 · 9:16 · portrait</string>
+    <string name="size_vertical_hd">1440×2560 · 9:16 · portrait HD</string>
+    <string name="size_wallpaper">1152×2560 · 9:20 · phone wallpaper</string>
+    <string name="size_square">1536×1536 · 1:1 · square</string>
+    <string name="size_land">1536×1024 · 3:2 · landscape</string>
+    <string name="size_land_hd">1728×1216 · 7:5 · landscape HD</string>
+    <string name="size_widescreen">1536×864 · 16:9 · widescreen</string>
+    <string name="size_wide">1728×972 · 16:9 · widescreen HD</string>
     <string name="about_gpl_note">Free and open source under GPL-3.0</string>
 </resources>

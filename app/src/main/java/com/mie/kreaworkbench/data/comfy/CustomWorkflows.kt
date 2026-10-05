@@ -1,6 +1,7 @@
 package com.mie.kreaworkbench.data.comfy
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.api.ApiException
 import com.mie.kreaworkbench.ui.locale.str
@@ -162,7 +163,8 @@ private fun clampNumber(raw: Any?, fallback: Double, min: Double?, max: Double?)
 }
 
 /** "WxH" 数组 → (w,h) 列表；解析不了的条目跳过。 */
-private fun parseSizes(arr: JSONArray?): List<Pair<Int, Int>>? {
+@VisibleForTesting
+internal fun parseSizes(arr: JSONArray?): List<Pair<Int, Int>>? {
     if (arr == null) return null
     val out = ArrayList<Pair<Int, Int>>()
     for (i in 0 until arr.length()) {
@@ -176,4 +178,5 @@ private fun parseSizes(arr: JSONArray?): List<Pair<Int, Int>>? {
 }
 
 /** 导入工作流不做 256..2560 的内置夹紧，只对齐 16、下限 64。 */
-private fun Int.align16(): Int = ((this / 16) * 16).coerceAtLeast(64)
+@VisibleForTesting
+internal fun Int.align16(): Int = ((this / 16) * 16).coerceAtLeast(64)

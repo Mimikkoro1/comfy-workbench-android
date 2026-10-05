@@ -579,7 +579,22 @@ private fun inferOne(nid: String, field: String, value: Any?, classType: String,
                 .put("max_chars", 2000).put("label", "负向提示词")
                 .put("help", "不希望出现的内容；留空则保持工作流原值。")
         }
-        if (classType == "CLIPTextEncode" && field == "text" && value.length > 20) {
+        // 9b. 其它文本编码节点（TextEncodeQwenImage21、TextEncodeQwenImageEdit 等，类名含 TextEncode）：
+        //     negative_prompt 或标题带 Negative 的 prompt → 负向提示词卡
+        val isTextEncode = baseClass(classType).contains("TextEncode", ignoreCase = true)
+        if (isTextEncode && (field == "negative_prompt" ||
+                (field == "prompt" && nodeTitle.contains("negative", ignoreCase = true)))
+        ) {
+            return base.put("type", "text").put("default", value)
+                .put("confidence", "high").put("current_value", value)
+                .put("node_title", nodeTitle).put("enabled", true)
+                .put("kwb_negative", true)
+                .put("max_chars", 2000).put("label", "负向提示词")
+                .put("help", "不希望出现的内容；留空则保持工作流原值。")
+        }
+        if ((classType == "CLIPTextEncode" && field == "text" ||
+                isTextEncode && field == "prompt") && value.length > 20
+        ) {
             return base.put("type", "prompt_pool").put("default", value)
                 .put("confidence", "medium").put("current_value", value)
                 .put("node_title", nodeTitle).put("enabled", true)

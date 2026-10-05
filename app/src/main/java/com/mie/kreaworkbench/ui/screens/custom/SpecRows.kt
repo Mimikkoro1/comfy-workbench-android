@@ -48,6 +48,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.BUILTIN_SIZES
+import com.mie.kreaworkbench.data.LEGACY_BUILTIN_SIZE_VALUES
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_720P
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_SOURCE
@@ -86,7 +87,14 @@ fun SpecRow(
     val scheme = MaterialTheme.colorScheme
     val rawLabel = Specs.label(spec)
     val label = knownText(rawLabel)
-    val showLabel = if (cardTitle == null) true else rawLabel != stringZh(cardTitle)
+    // 提示词卡里的主提示词不再重复显示字段名（导入时自动生成的「节点标题 · prompt」之类），与 Krea2 一致只留卡片标题
+    val isMainPrompt = (type == "text" || type == "prompt_pool") && key == vm.mainPromptKey()
+    val showLabel = when {
+        cardTitle == null -> true
+        cardTitle == R.string.label_prompt && isMainPrompt -> false
+        else -> rawLabel != stringZh(cardTitle)
+    }
+    val sharedFilter = vm.usesSharedFilter(spec)
     // 模型类 spec 不显示说明（旧定义里每个模型都带同一句 wf_help_model，重复占位）
     val help = if (type == "model") "" else shownHelp(spec, vm.outputKind)
     // 抽卡只在文生图、且当前库有条目时出现。判定只走 isTextToImageWorkflow。
@@ -132,7 +140,7 @@ fun SpecRow(
                     // 备选数小字（round11）：该槽实际生效筛选下的池大小——prompt_pool 槽=共享筛选后，
                     // text 槽=全库（与抽卡按槽型分流一致）；不含被冷却冻结的卡，数字不随抽卡跳动。
                     // null=尚未算出，不显示避免闪 0。与 help 行同风格（11sp / onSurfaceVariant）
-                    val poolSize = (if (type == "prompt_pool") vm.drawPoolSize else vm.libraryPoolSize).collectAsState()
+                    val poolSize = (if (sharedFilter) vm.drawPoolSize else vm.libraryPoolSize).collectAsState()
                     poolSize.value?.let { n ->
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -142,10 +150,9 @@ fun SpecRow(
                         )
                     }
                 }
-                if (drawOk && belowMainPrompt != null &&
-                    key == vm.mainPromptKey() &&
-                    type == "prompt_pool"
-                ) {
+                // r14fix3：原条件要求 type=="prompt_pool"，主提示词是 text 型（如 Qwen 的
+                // TextEncodeQwenImage21.prompt）时筛选框不出；现在主提示词槽不论类型都挂
+                if (drawOk && belowMainPrompt != null && isMainPrompt && sharedFilter) {
                     // 抽卡按钮（56dp）与筛选行（40dp）之间留正常间距，此前 0 间距贴死视觉上重叠
                     Spacer(Modifier.height(12.dp))
                     belowMainPrompt()
@@ -331,9 +338,10 @@ fun SpecRow(
                 } else {
                 // 单选（direct10c）：预设全在一个下拉里，选中即切换不是追加；「自定义」只展开 W×H
                 // 输入框，输入的宽高就是当前尺寸；选中预设后输入框收起并同步成该预设值
-                val presets = Specs.sizePresets(spec).ifEmpty {
-                    BUILTIN_SIZES.map { it.label to "${it.width}x${it.height}" }
-                }
+                // 定义里没写 presets，或写的就是旧版内置 9 项（老导入定义）→ 用当前内置列表（新标签 + 9:16）
+                val presets = Specs.sizePresets(spec).takeUnless {
+                    it.isEmpty() || it.map { p -> p.second }.toSet() == LEGACY_BUILTIN_SIZE_VALUES
+                } ?: BUILTIN_SIZES.map { it.label to "${it.width}x${it.height}" }
                 val presetLabels = knownLabels(presets.map { it.first })
                 var customW by remember { mutableStateOf("") }
                 var customH by remember { mutableStateOf("") }

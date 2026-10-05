@@ -17,6 +17,7 @@ fun buildCustomBody(
     seedRandom: Boolean,
     outputNode: String,
     outputKind: String = "image",
+    workflowName: String = "",
 ): JSONObject = JSONObject()
     .put("client_job_id", clientId)
     .put("mode", "custom")
@@ -28,3 +29,5 @@ fun buildCustomBody(
     .put("output_node", outputNode)
     .put("kwb_output", outputKind)
     .put("values", values)
+    // 仅供图片信息页显示「用的哪个工作流」（paramsJson = 提交 body）；服务端/构图不读这个键
+    .apply { if (workflowName.isNotBlank()) put("workflow_name", workflowName.take(200)) }

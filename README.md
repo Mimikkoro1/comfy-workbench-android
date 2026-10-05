@@ -2,7 +2,7 @@
 
 > 导入一条工作流，手机上点一下出图。不连线，不改节点。
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE) [![Android CI](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml)
 
 **Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。电脑上把 ComfyUI 工作流导出成 API 格式，手机里导入，参数变成几个输入框：提示词、种子、尺寸、参考图。点一下就提交到你自己的 ComfyUI。
 
@@ -13,7 +13,7 @@
 ## 它做什么
 
 - **直连你的 ComfyUI**：HTTP + WebSocket，实时进度，没有云端中转。提示词、参数、图片只经过手机和你自己的机器
-- **工作流变操作面板**：导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图映射成手机控件。示例在 `docs/example-workflows/`
+- **工作流变操作面板**：导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图映射成手机控件。提示词识别 CLIPTextEncode 和 Qwen 等 TextEncode 节点；内置 11 个尺寸预设（含 9:16 竖屏）。示例在 `docs/example-workflows/`
 - **提示词库**：分类取词、随机抽卡、保存和编辑
 - **画廊**：图片 / 视频统一浏览，可放大、可播放。结果只进 App 图库，**不自动写入系统相册**，要留的再手动保存或分享
 - **后台跑完**：生成和下载走前台服务，锁屏或切走不会中断，通知栏能看到进度
@@ -79,6 +79,8 @@
 gradlew.bat assembleRelease
 ```
 
+单元测试：`./gradlew testDebugUnitTest`（纯 JVM，不需要手机或模拟器）。
+
 签名：复制 `keystore.properties.example` 为 `keystore.properties` 并填入 keystore。未配置时使用 debug 签名。
 
 ## FAQ
@@ -107,6 +109,7 @@ gradlew.bat assembleRelease
 
 It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay on the computer. The phone only runs them.
 
+- Prompts are detected on CLIPTextEncode and TextEncode-style nodes such as Qwen; 11 built-in size presets including 9:16
 - API-format workflows only. The default `nodes` / `links` file must be exported with Export (API) first
 - No video-file input in this version. Image-to-video is supported; the input is a reference image
 - Linked inputs are not exposed. Only literal parameters become controls
@@ -128,7 +131,7 @@ Remote access: on mainland China, Oray Pgyer (蒲公英) is the simplest mesh. P
 | --- | --- | --- | --- |
 | <img src="docs/screenshots/generate_en.png" width="216"/> | <img src="docs/screenshots/gallery_en.png" width="216"/> | <img src="docs/screenshots/library_en.png" width="216"/> | <img src="docs/screenshots/settings_en.png" width="216"/> |
 
-Build: JDK 17 + Android SDK, then `./gradlew assembleRelease`.
+Build: JDK 17 + Android SDK, then `./gradlew assembleRelease`. Unit tests (plain JVM, no device): `./gradlew testDebugUnitTest`.
 
 Licensed under **GPL-3.0**. Unofficial project, not affiliated with Comfy Org. ComfyUI and the ComfyUI logo are trademarks of Comfy Org.
 

@@ -399,13 +399,6 @@
     <string name="wf_uncat">未分类</string>
     <string name="wf_imported">导入的工作流</string>
     <string name="wf_import_lib">导入库</string>
-    <string name="size_full">1152×1728 · 2:3 全身（默认）</string>
-    <string name="size_portrait">1024×1536 · 2:3 人像</string>
-    <string name="size_portrait_hd">1216×1728 · 人像高清</string>
-    <string name="size_wallpaper">1152×2560 · 手机壁纸</string>
-    <string name="size_wide">1728×972 · 16:9 超宽</string>
-    <string name="size_land">1536×1024 · 3:2 横版</string>
-    <string name="size_land_hd">1728×1216 · 横版高清</string>
     <plurals name="image_total">
         <item quantity="one">共 %d 张</item>
         <item quantity="other">共 %d 张</item>
@@ -466,5 +459,18 @@
     <string name="update_ignore">忽略此版本</string>
     <string name="update_later">稍后</string>
     <string name="update_no_notes">（无更新说明）</string>
+    <string name="info_file_size">文件大小：%1$s</string>
+    <string name="info_created_at">生成时间：%1$s</string>
+    <string name="size_full">1152×1728 · 2:3 · 全身（默认）</string>
+    <string name="size_portrait">1024×1536 · 2:3 · 人像</string>
+    <string name="size_portrait_hd">1216×1728 · 5:7 · 人像高清</string>
+    <string name="size_vertical">1088×1920 · 9:16 · 竖屏</string>
+    <string name="size_vertical_hd">1440×2560 · 9:16 · 竖屏高清</string>
+    <string name="size_wallpaper">1152×2560 · 9:20 · 手机壁纸</string>
+    <string name="size_square">1536×1536 · 1:1 · 方图</string>
+    <string name="size_land">1536×1024 · 3:2 · 横版</string>
+    <string name="size_land_hd">1728×1216 · 7:5 · 横版高清</string>
+    <string name="size_widescreen">1536×864 · 16:9 · 横屏</string>
+    <string name="size_wide">1728×972 · 16:9 · 横屏高清</string>
     <string name="about_gpl_note">本应用基于 GPL-3.0 协议免费开源</string>
 </resources>

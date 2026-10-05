@@ -147,6 +147,17 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     fun totalCount(): Int = sizeCount() * batchSize
 
+    /**
+     * 该槽抽卡是否带共享筛选（r14fix3）：prompt_pool 槽一律带；主提示词槽即使是 text（如 Qwen
+     * TextEncodeQwenImage21.prompt 被手动勾选、低置信度导入成 text）也带——筛选框挂在主提示词下，
+     * 抽卡/备选数必须和它一致。其余 text 槽保持全库（round11 裁决 A）。
+     */
+    fun usesSharedFilter(spec: JSONObject?): Boolean {
+        if (spec == null || spec.optBoolean("kwb_negative")) return false
+        val type = Specs.type(spec)
+        return type == "prompt_pool" || (type == "text" && Specs.key(spec) == mainPromptKey())
+    }
+
     /** 主提示词：example_key=="prompt" 优先 → 第一个 prompt_pool → 第一个 text（负向除外）。 */
     fun mainPrompt(): String {
         val key = mainPromptKey() ?: return ""
@@ -513,9 +524,9 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             drawingKey = key
             message = ""
             try {
-                // 按槽型分流筛选参数（round11 冲突澄清，裁决 A）：prompt_pool 槽带共享筛选，text 槽不带（全库）
+                // 按槽型分流筛选参数（round11 裁决 A + r14fix3）：prompt_pool 槽与主提示词槽带共享筛选，其余 text 槽全库
                 val spec = specs.firstOrNull { Specs.key(it) == key }
-                val json = if (spec != null && Specs.type(spec) == "prompt_pool") {
+                val json = if (usesSharedFilter(spec)) {
                     c.library.draw(drawCat, drawInc, drawExc)
                 } else {
                     c.library.draw("", "", "")
@@ -608,6 +619,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     seedRandom = seedRandom,
                     outputNode = outputNode,
                     outputKind = outputKind,
+                    workflowName = displayName.takeIf { it.isNotBlank() && it != id }
+                        ?: c.workflowStore.labelOf(id).orEmpty(),
                 )
                 // 参考图：按原样暂存直传（与图生图一致，压缩只在上传超时/失败且用户确认后进行）；
                 // 暂存文件名跟任务 id 走，避免同工作流两个任务共用/互删同一个 uploads 文件
