@@ -1,0 +1,16 @@
+{
+  "1": {"class_type": "CheckpointLoaderSimple", "_meta": {"title": "Load Checkpoint"}, "inputs": {"ckpt_name": "example_ckpt.safetensors"}},
+  "2": {"class_type": "LoraLoader", "_meta": {"title": "Style LoRA"}, "inputs": {"model": ["1", 0], "clip": ["1", 1], "lora_name": "style_a.safetensors", "strength_model": 0.8, "strength_clip": 0.6}},
+  "3": {"class_type": "LoraLoaderModelOnly", "_meta": {"title": "Detail LoRA"}, "inputs": {"model": ["2", 0], "lora_name": "detail_b.safetensors", "strength_model": 1}},
+  "4": {"class_type": "LoraLoader|pysssss", "_meta": {"title": "Char LoRA"}, "inputs": {"model": ["3", 0], "clip": ["2", 1], "lora_name": "char_c.safetensors", "strength_model": 0.7, "strength_clip": 0.7}},
+  "5": {"class_type": "Power Lora Loader (rgthree)", "_meta": {"title": "Power Lora Loader (rgthree)"}, "inputs": {"model": ["4", 0], "clip": ["4", 1], "PowerLoraLoaderHeaderWidget": {"type": "PowerLoraLoaderHeaderWidget"}, "lora_1": {"on": true, "lora": "multi_d.safetensors", "strength": 1.0}, "lora_2": {"on": false, "lora": "multi_e.safetensors", "strength": 0.5, "strengthTwo": 0.4}, "➕ Add Lora": ""}},
+  "6": {"class_type": "LoraLoaderModelOnly", "_meta": {"title": "Linked LoRA"}, "inputs": {"model": ["5", 0], "lora_name": "linked_f.safetensors", "strength_model": ["20", 0]}},
+  "7": {"class_type": "NunchakuFluxLoraLoader", "_meta": {"title": "Nunchaku LoRA"}, "inputs": {"model": ["6", 0], "lora_name": "nunchaku_g.safetensors", "lora_strength": 0.9}},
+  "8": {"class_type": "CR LoRA Stack", "_meta": {"title": "CR LoRA Stack"}, "inputs": {"switch_1": "On", "lora_name_1": "stack_h.safetensors", "model_weight_1": 1.0, "clip_weight_1": 1.0}},
+  "9": {"class_type": "LoraLoaderModelOnly", "_meta": {"title": "Empty LoRA"}, "inputs": {"model": ["7", 0], "lora_name": "None", "strength_model": 1.0}},
+  "10": {"class_type": "CLIPTextEncode", "_meta": {"title": "Positive"}, "inputs": {"clip": ["5", 1], "text": "placeholder prompt: a quiet lake at dawn, film photo"}},
+  "11": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "12": {"class_type": "KSampler", "inputs": {"model": ["9", 0], "positive": ["10", 0], "negative": ["10", 0], "latent_image": ["11", 0], "seed": 42, "steps": 20, "cfg": 3.5, "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0}},
+  "13": {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0], "vae": ["1", 2]}},
+  "14": {"class_type": "SaveImage", "inputs": {"images": ["13", 0], "filename_prefix": "lora_mix"}}
+}

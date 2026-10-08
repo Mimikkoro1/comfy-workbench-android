@@ -23,6 +23,7 @@ import com.mie.kreaworkbench.ui.locale.AppLocale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class KreaApp : Application(), ImageLoaderFactory {
@@ -84,7 +85,7 @@ class KreaApp : Application(), ImageLoaderFactory {
             // 有变更就 bump revision 让生成页/画廊立刻重读。无坏行时近乎零成本。
             try {
                 if (container.db.healZeroSizedImages() > 0) {
-                    container.engine.revision.value = container.engine.revision.value + 1
+                    container.engine.revision.update { it + 1 }
                 }
             } catch (_: Exception) {
             }

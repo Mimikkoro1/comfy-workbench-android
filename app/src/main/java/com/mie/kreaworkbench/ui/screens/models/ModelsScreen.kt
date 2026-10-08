@@ -44,6 +44,7 @@ import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.nav.NavModel
 import com.mie.kreaworkbench.ui.screens.custom.CustomModel
+import com.mie.kreaworkbench.ui.screens.custom.LoraToggleRow
 import com.mie.kreaworkbench.ui.screens.custom.SpecRow
 import com.mie.kreaworkbench.ui.locale.knownText
 import com.mie.kreaworkbench.ui.screens.custom.WorkflowEmptyState
@@ -118,13 +119,18 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
                 // 分工路由：模型（type==model）与参数（select/int/float/bool），平铺不折叠；
                 // kwb_gen 的 int（帧数/帧率）在生成页，不进设置页
                 val modelSpecs = vm.specs.filter { Specs.type(it) == "model" }
+                // LoRA 开关行（round16）：没有对应 model spec 的单加载器（导入时没勾文件字段）+ 所有 Power 槽
+                val loraExtra = vm.loraEntries.filter { entry -> vm.specs.none { vm.loraEntryForSpec(it) == entry } }
+                // 被自动强度框接管的强度参数不再显示（值照旧写入，提交时被 LoRA 层覆盖）
                 val paramSpecs = vm.specs.filter {
-                    Specs.type(it) in setOf("select", "int", "float", "bool") && !it.optBoolean("kwb_gen")
+                    Specs.type(it) in setOf("select", "int", "float", "bool") && !it.optBoolean("kwb_gen") &&
+                        Specs.key(it) !in vm.loraManaged
                 }
-                if (modelSpecs.isNotEmpty()) {
+                if (modelSpecs.isNotEmpty() || loraExtra.isNotEmpty()) {
                     KreaCard {
                         Text(stringResource(R.string.label_model), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = scheme.onSurface)
                         modelSpecs.forEach { spec -> SpecRow(vm, spec, {}, {}) }
+                        loraExtra.forEach { entry -> LoraToggleRow(vm, entry) }
                     }
                     Spacer(Modifier.height(12.dp))
                 }

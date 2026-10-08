@@ -1,0 +1,6 @@
+{
+  "1": {"class_type": "LoadVideo", "_meta": {"title": "Load Video"}, "inputs": {"file": "clip.mp4"}},
+  "2": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
+  "3": {"class_type": "CreateVideo", "inputs": {"images": ["2", 0], "audio": ["2", 1], "fps": ["2", 2]}},
+  "4": {"class_type": "SaveVideo", "inputs": {"video": ["3", 0], "filename_prefix": "video/core", "format": "auto", "codec": "auto"}}
+}

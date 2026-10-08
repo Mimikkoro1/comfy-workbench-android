@@ -200,7 +200,7 @@ class InferRulesTest {
     // ---------- §4.9 VHS_LoadVideo ----------
 
     @Test
-    fun vhsLoadVideoDisabled() {
+    fun vhsLoadVideoEnabled() {
         val spec = one(
             JSONObject(
                 """{"1":{"class_type":"VHS_LoadVideo","_meta":{"title":"Load Video"},""" +
@@ -209,8 +209,8 @@ class InferRulesTest {
         )
         assertEquals("type", "file:video", spec.optString("type"))
         assertEquals("confidence", "high", spec.optString("confidence"))
-        assertFalse("enabled（本版不支持视频输入）", spec.optBoolean("enabled"))
-        assertEquals("help", "本版不支持视频输入。", spec.optString("help"))
+        assertTrue("enabled（round17 起视频槽默认勾选）", spec.optBoolean("enabled"))
+        assertEquals("help", "上传本次生成使用的视频。", spec.optString("help"))
         assertEquals("default", "input.mp4", spec.optString("default"))
     }
 

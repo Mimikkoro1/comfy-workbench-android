@@ -145,7 +145,6 @@ fun ViewerScreen(
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
-    var alsoServer by remember { mutableStateOf(false) }
     var pull by remember { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -292,27 +291,17 @@ fun ViewerScreen(
                     },
                 )
             },
-            text = {
-                Column {
-                    Text(stringResource(R.string.viewer_delete_body))
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = alsoServer, onCheckedChange = { alsoServer = it })
-                        Text(stringResource(R.string.gallery_delete_server))
-                    }
-                }
-            },
+            text = { Text(stringResource(R.string.viewer_delete_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirm = false
                     val row = current
-                    val deleteServer = alsoServer
-                    alsoServer = false
                     scope.launch {
-                        val serverErr = persistDelete(app, row, deleteServer)
+                        // round19b：只删手机本地。远端删除能力（ComfyApi.deleteRemoteImage）
+                        // 早就是空实现了，弹窗不再问「是否同时删服务器」。
+                        persistDelete(app, row)
                         val next = rows.filter { it.id != row.id }
                         rows = next
-                        if (serverErr != null) notify(toaster, context, context.str(R.string.gallery_deleted_server, serverErr))
                         if (next.isEmpty()) onBack()
                     }
                 }) { Text(stringResource(R.string.action_delete)) }

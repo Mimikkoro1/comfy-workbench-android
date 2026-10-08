@@ -77,6 +77,7 @@ import com.mie.kreaworkbench.ui.screens.gen.BatchPicker
 import com.mie.kreaworkbench.ui.screens.gen.JobStatusCard
 import com.mie.kreaworkbench.ui.screens.gen.ShimmerStrip
 import com.mie.kreaworkbench.ui.screens.gen.ThumbRow
+import com.mie.kreaworkbench.ui.screens.gen.VideoThumbCell
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.knownText
@@ -85,8 +86,8 @@ import com.mie.kreaworkbench.ui.locale.str
 import java.io.File
 import kotlin.math.roundToInt
 
-/** 生成页的分工：text/prompt_pool/image_sizes/int_random/file:image；model/select/int/float/bool 在设置页。 */
-private val GEN_TYPES = setOf("text", "prompt_pool", "image_sizes", "int_random", "file:image")
+/** 生成页的分工：text/prompt_pool/image_sizes/int_random/file:image/file:video；model/select/int/float/bool 在设置页。 */
+private val GEN_TYPES = setOf("text", "prompt_pool", "image_sizes", "int_random", "file:image", "file:video")
 
 @Composable
 fun CustomScreen(
@@ -125,6 +126,11 @@ fun CustomScreen(
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.useUri(uri)
     }
+    // 参考视频（round17）：系统选择器只显示视频；图库来源走底部弹窗 videoSheet
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.useVideoUri(uri)
+    }
+    var videoSheet by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val total = vm.totalCount()
     val overLimit = total > 8
@@ -184,8 +190,10 @@ fun CustomScreen(
             }
             val negatives = vm.specs.filter { it.optBoolean("kwb_negative") }
             val images = vm.specs.filter { Specs.type(it) == "file:image" && Specs.tier(it) != "advanced" }
+            val videos = vm.specs.filter { Specs.type(it) == "file:video" && Specs.tier(it) != "advanced" }
             val sizes = vm.specs.filter { Specs.type(it) == "image_sizes" && Specs.tier(it) != "advanced" }
-            val genInts = vm.specs.filter { Specs.type(it) == "int" && it.optBoolean("kwb_gen") }
+            // 视频参数卡（round17）：读帧参数 force_rate / start_time 可能是 float
+            val genInts = vm.specs.filter { Specs.type(it) in setOf("int", "float") && it.optBoolean("kwb_gen") }
             val seeds = vm.specs.filter { Specs.type(it) == "int_random" && Specs.tier(it) != "advanced" }
             val advanced = vm.specs.filter {
                 Specs.tier(it) == "advanced" && Specs.type(it) in GEN_TYPES && !it.optBoolean("kwb_negative")
@@ -216,6 +224,22 @@ fun CustomScreen(
                             { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             { sheet = true },
                             cardTitle = R.string.card_reference,
+                        )
+                    }
+                }
+            }
+            if (videos.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                KreaCard {
+                    Text(stringResource(R.string.card_reference_video), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = scheme.onSurface)
+                    videos.forEach { spec ->
+                        SpecRow(
+                            vm, spec, {}, {},
+                            onPickVideo = {
+                                pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                            },
+                            onPickVideoGallery = { videoSheet = true },
+                            cardTitle = R.string.card_reference_video,
                         )
                     }
                 }
@@ -470,6 +494,35 @@ fun CustomScreen(
             }
         }
     }
+
+    if (videoSheet) {
+        ModalBottomSheet(onDismissRequest = { videoSheet = false }, sheetState = rememberModalBottomSheetState()) {
+            Text(stringResource(R.string.pick_video_from_gallery), modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            // 护栏（round17）：只列还存在的视频行——文本行 / 图片行 / localPath 为空或文件已丢的行都不进网格
+            val videoRows = vm.pickerVideos()
+            if (videoRows.isEmpty()) {
+                Text(stringResource(R.string.gallery_empty_videos), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(360.dp).padding(8.dp)) {
+                items(videoRows, key = { it.id }) { img ->
+                    // 点格子只选中不播放；VideoThumbCell 原样复用（画廊 / 任务卡同款首帧 + 时长角标）
+                    Box(
+                        Modifier
+                            .animateItem()
+                            .padding(4.dp)
+                            .size(110.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                vm.useVideoPath(img.localPath)
+                                videoSheet = false
+                            },
+                    ) {
+                        VideoThumbCell(img)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -511,6 +564,13 @@ private fun customSummary(vm: CustomModel, context: Context): String {
         val random = vm.randomOn[key] ?: Specs.randomDefault(spec)
         val value = vm.textValues[key]?.takeIf { it.isNotBlank() } ?: "0"
         parts.add(if (random) context.str(R.string.seed_random) else context.str(R.string.seed_fixed, value))
+    }
+    // LoRA 开关（round16）：有工作流级的 LoRA 且至少一个关闭时显示「开启数/总数」；全开不显示
+    if (vm.loraEntries.isNotEmpty()) {
+        val off = vm.loraEntries.count { vm.loraOn[it.key] == false }
+        if (off > 0) {
+            parts.add(context.getString(R.string.lora_summary, vm.loraEntries.size - off, vm.loraEntries.size))
+        }
     }
     return parts.joinToString(" · ")
 }

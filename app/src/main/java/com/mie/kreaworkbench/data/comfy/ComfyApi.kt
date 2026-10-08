@@ -726,10 +726,6 @@ class ComfyApi(
         discardIds(ids)
     }
 
-    /** ComfyUI 没有删文件接口：远端删除是空操作，只删手机本地。 */
-    suspend fun deleteRemoteImage(filename: String, subfolder: String, type: String = "output") {
-    }
-
     private fun executionMessage(messages: JSONArray?): String? {
         if (messages == null) return null
         for (i in 0 until messages.length()) {

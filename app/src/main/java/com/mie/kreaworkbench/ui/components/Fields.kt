@@ -169,6 +169,7 @@ fun CompactTextField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
+    enabled: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(12.dp)
@@ -176,6 +177,7 @@ fun CompactTextField(
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        enabled = enabled,
         singleLine = true,
         textStyle = MaterialTheme.typography.labelMedium.copy(color = scheme.onSurface),
         cursorBrush = SolidColor(scheme.primary),

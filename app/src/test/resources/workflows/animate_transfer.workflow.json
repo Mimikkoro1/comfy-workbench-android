@@ -1,0 +1,11 @@
+{
+  "1": {"class_type": "VHS_LoadVideo", "_meta": {"title": "Motion Video"}, "inputs": {"video": "motion_ref.mp4", "force_rate": 16, "custom_width": 720, "custom_height": 1280, "frame_load_cap": 154, "skip_first_frames": 0, "select_every_nth": 1, "format": "AnimateDiff"}},
+  "2": {"class_type": "VHS_LoadVideo", "_meta": {"title": "Motion Video (copy)"}, "inputs": {"video": "motion_ref.mp4", "force_rate": 16, "custom_width": 720, "custom_height": 1280, "frame_load_cap": 154, "skip_first_frames": 0, "select_every_nth": 1, "format": "AnimateDiff"}},
+  "3": {"class_type": "LoadImage", "_meta": {"title": "Character"}, "inputs": {"image": "character.png", "upload": "image"}},
+  "4": {"class_type": "CLIPTextEncode", "_meta": {"title": "Positive"}, "inputs": {"clip": ["9", 0], "text": "placeholder prompt: a character dancing in a studio, soft light"}},
+  "5": {"class_type": "WanAnimateToVideo", "inputs": {"positive": ["4", 0], "pose_video": ["1", 0], "face_video": ["2", 0], "reference_image": ["3", 0], "width": 720, "height": 1280, "length": 77}},
+  "6": {"class_type": "KSampler", "inputs": {"model": ["8", 0], "positive": ["5", 0], "negative": ["5", 1], "latent_image": ["5", 2], "seed": 7, "steps": 4, "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1}},
+  "7": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["6", 0], "frame_rate": 16, "filename_prefix": "animate", "format": "video/h264-mp4"}},
+  "8": {"class_type": "UNETLoader", "inputs": {"unet_name": "Wan2.2\\example_animate.safetensors", "weight_dtype": "default"}},
+  "9": {"class_type": "CLIPLoader", "inputs": {"clip_name": "example_t5.safetensors", "type": "wan"}}
+}

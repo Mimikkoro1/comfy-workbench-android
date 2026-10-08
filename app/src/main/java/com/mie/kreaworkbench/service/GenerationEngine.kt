@@ -42,6 +42,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.supervisorScope
@@ -78,6 +79,11 @@ class GenerationEngine(
     val snapshot = MutableStateFlow<List<LiveJob>>(emptyList())
     val revision = MutableStateFlow(0L)
 
+    init {
+        // 启动兜底清理（round17）：视频暂存大，扫一次 uploads/ 里过期又无任务引用的文件
+        scope.launch { cleanupStaleUploads() }
+    }
+
     fun reconcile() {
         scope.launch {
             db.needsWork().forEach { kick(it.clientJobId) }
@@ -89,12 +95,13 @@ class GenerationEngine(
         val cm = appContext.getSystemService(ConnectivityManager::class.java) ?: return
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                resumePaused()
+                // needsWork() 会读库，不能在网络回调线程上跑
+                scope.launch { resumePaused() }
             }
         })
     }
 
-    fun resumePaused() {
+    suspend fun resumePaused() {
         val pending = db.needsWork().isNotEmpty() || live.values.any { it.phase !in TERMINAL || it.phase == "paused" }
         if (!pending) return
         startGenerationService(appContext)
@@ -107,7 +114,7 @@ class GenerationEngine(
         }
     }
 
-    fun hasUnfinished(): Boolean = try {
+    suspend fun hasUnfinished(): Boolean = try {
         db.needsWork().any { it.state != "paused" }
     } catch (_: Exception) {
         false
@@ -130,6 +137,14 @@ class GenerationEngine(
             // 先停掉提交/轮询协程再撤销：提交阶段 jobId 还没写回，旧写法（先 cancelJob 后 cancel）
             // 会跳过撤销、且提交协程可能在撤销之后又交一张
             running[clientId]?.cancelAndJoin()
+            // round17：取消时删暂存视频（失败不删，可能手动重试；参考图沿用原行为不删）
+            try {
+                db.job(clientId)?.requestJson?.let { raw ->
+                    val lv = runCatching { JSONObject(raw).optString("local_video") }.getOrNull()
+                    if (!lv.isNullOrBlank()) File(lv).delete()
+                }
+            } catch (_: Exception) {
+            }
             // 先落「已取消」再撤服务器：断网时撤销请求会拖满超时，UI 不能跟着等
             db.updateJob(clientId) { it.copy(state = "cancelled", error = "") }
             put(liveOf(clientId, "cancelled"))
@@ -318,7 +333,7 @@ class GenerationEngine(
                     text = t.text,
                 ),
             )
-            revision.value = revision.value + 1
+            revision.update { it + 1 }
         }
         return true
     }
@@ -391,7 +406,7 @@ class GenerationEngine(
             )
             db.insertImage(videoRow)
             cache.enforce()
-            revision.value = revision.value + 1
+            revision.update { it + 1 }
         }
         return true
     }
@@ -449,6 +464,29 @@ class GenerationEngine(
             }
             if (outW <= 0 || outH <= 0) {
                 file.delete()
+                // round18：只删文件不记账会让 needsWork 的「done > 图片数 + 墓碑数」永远为真，
+                // 任务被判成「还有产物没拿全」，每次冷启动都重新下载同一个坏文件。补一条墓碑封口。
+                db.addTombstone(
+                    ImageRow(
+                        id = 0,
+                        jobId = job.jobId,
+                        clientJobId = clientId,
+                        idx = img.index,
+                        mode = job.mode,
+                        prompt = job.prompt,
+                        paramsJson = "",
+                        seed = img.seed,
+                        width = 0,
+                        height = 0,
+                        remoteFilename = img.filename,
+                        remoteSubfolder = img.subfolder,
+                        localPath = "",
+                        sizeBytes = 0,
+                        createdAt = System.currentTimeMillis(),
+                        savedToAlbum = false,
+                        albumUri = "",
+                    ),
+                )
                 continue
             }
             val imgRow = ImageRow(
@@ -472,7 +510,7 @@ class GenerationEngine(
             )
             db.insertImage(imgRow)
             cache.enforce()
-            revision.value = revision.value + 1
+            revision.update { it + 1 }
         }
         return true
     }
@@ -525,8 +563,69 @@ class GenerationEngine(
             finishLocal(clientId, "failed", appContext.str(R.string.err_workflow_deleted))
             return null
         }
-        var slotKey: String? = null
+        var values = json.optJSONObject("values")
+
+        // 视频槽位（round17）：定义里第一个 file:video spec。先传视频再走图片流程；
+        // 视频不弹「是否压缩」，网络失败重试到 cap 后 pause。
+        var videoSlot: String? = null
         val specs = def.optJSONArray("user_facing_inputs")
+        if (specs != null) {
+            for (i in 0 until specs.length()) {
+                val spec = specs.optJSONObject(i) ?: continue
+                if (spec.optString("type") == "file:video") {
+                    videoSlot = "${spec.optString("node_id")}|${spec.optString("field")}"
+                    break
+                }
+            }
+        }
+        if (videoSlot != null && values?.optString(videoSlot).orEmpty().isBlank()) {
+            val slot: String = videoSlot
+            val path = json.optString("local_video")
+            val file = File(path)
+            if (path.isBlank() || !file.exists()) {
+                finishLocal(clientId, "failed", appContext.str(R.string.err_video_missing))
+                return null
+            }
+            db.updateJob(clientId) { it.copy(state = "uploading") }
+            put(liveOf(clientId, "uploading").copy(download = 0f))
+            val uploadDeadline = minOf(deadline, System.currentTimeMillis() + NETWORK_RETRY_CAP_MS)
+            var uploadedPair: Pair<String, String>? = null
+            while (System.currentTimeMillis() < uploadDeadline) {
+                if (clientId in stopFlag) return null
+                try {
+                    val uploaded = transfer.uploadVideo(file) { frac ->
+                        put(liveOf(clientId, "uploading").copy(download = frac))
+                    }
+                    val vals = values ?: JSONObject().also { values = it; json.put("values", it) }
+                    vals.put(slot, "${uploaded.second}/${uploaded.first}")
+                    json.remove("local_video")
+                    // 先落库再删文件：续传 / 重启后不会重复上传
+                    db.updateJob(clientId) { it.copy(requestJson = json.toString()) }
+                    file.delete()
+                    uploadedPair = uploaded
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ApiException) {
+                    if (!e.network) {
+                        finishLocal(clientId, "failed", e.message ?: appContext.str(R.string.err_upload_failed))
+                        return null
+                    }
+                    put(liveOf(clientId, "uploading", error = e.message ?: ""))
+                    delay(5000)
+                } catch (_: Exception) {
+                    delay(5000)
+                }
+            }
+            if (uploadedPair == null) {
+                pause(clientId)
+                return null
+            }
+        }
+
+        // 图片槽位：定义里第一个 file:image spec 的 values 键。
+        // 定义/工作流已被删除属不可重试失败，直接报错，不能在这里无限重试。
+        var slotKey: String? = null
         if (specs != null) {
             for (i in 0 until specs.length()) {
                 val spec = specs.optJSONObject(i) ?: continue
@@ -536,8 +635,8 @@ class GenerationEngine(
                 }
             }
         }
-        val values = json.optJSONObject("values")
-        if (slotKey == null || values?.optString(slotKey).orEmpty().isNotBlank()) return raw
+        // 视频步骤可能已改过 json（values/local_video），早退必须返回新串
+        if (slotKey == null || values?.optString(slotKey).orEmpty().isNotBlank()) return json.toString()
         val slot: String = slotKey
 
         val path = json.optString("local_jpeg")
@@ -793,7 +892,7 @@ class GenerationEngine(
 
     private fun emitDone(clientId: String, state: String, error: String?) {
         if (state == "cancelled") return
-        val count = db.imagesForClient(clientId).size
+        val count = db.imagePathsForClient(clientId).size
         val title = when (state) {
             "failed" -> appContext.str(R.string.err_generation_failed)
             else -> appContext.str(R.string.notify_done)
@@ -834,8 +933,36 @@ class GenerationEngine(
         emitDone(clientId, state, error)
     }
 
+    /**
+     * 暂存文件兜底清理（round17）：删 filesDir/uploads/ 里修改时间早于 72 小时、且没有被任何
+     * 进行中任务（needsWork 覆盖 uploading/paused/pending 等全部非终态）的 requestJson
+     * （local_video / local_jpeg）引用的文件。只扫 uploads/，永不碰图库目录。
+     * 失败任务的暂存文件 72 小时内仍可手动重试，之后由这里回收。
+     */
+    private suspend fun cleanupStaleUploads() {
+        try {
+            val dir = File(appContext.filesDir, "uploads")
+            if (!dir.isDirectory) return
+            val referenced = HashSet<String>()
+            for (row in db.needsWork()) {
+                val json = runCatching { JSONObject(row.requestJson) }.getOrNull() ?: continue
+                for (key in listOf("local_video", "local_jpeg")) {
+                    val p = json.optString(key)
+                    if (p.isNotBlank()) referenced.add(File(p).absolutePath)
+                }
+            }
+            val cutoff = System.currentTimeMillis() - STALE_UPLOAD_MS
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.lastModified() < cutoff && f.absolutePath !in referenced) {
+                    runCatching { f.delete() }
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun fromRemote(clientId: String, job: RemoteJob, phase: String): LiveJob {
-        val paths = db.imagesForClient(clientId).map { it.localPath }
+        val paths = db.imagePathsForClient(clientId)
         val cur = live[clientId]
         return LiveJob(
             clientJobId = clientId,
@@ -858,7 +985,7 @@ class GenerationEngine(
     private fun liveOf(clientId: String, phase: String, prompt: String = "", error: String = ""): LiveJob {
         val row = db.job(clientId)
         val cur = live[clientId]
-        val paths = db.imagesForClient(clientId).map { it.localPath }
+        val paths = db.imagePathsForClient(clientId)
         return LiveJob(
             clientJobId = clientId,
             mode = row?.mode ?: cur?.mode ?: "",
@@ -890,6 +1017,9 @@ private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif
 
 /** 原图上传满这段时间就弹出「继续 / 压缩」。只是界面计时，不取消请求。 */
 private const val ORIGINAL_UPLOAD_TIMEOUT_MS = 10_000L
+
+/** uploads/ 暂存文件的保留期（round17）：修改时间早于该值且无任务引用的文件启动时删除。 */
+private const val STALE_UPLOAD_MS = 72 * 60 * 60 * 1000L
 
 private sealed class OriginalUpload {
     class Ok(val pair: Pair<String, String>) : OriginalUpload()

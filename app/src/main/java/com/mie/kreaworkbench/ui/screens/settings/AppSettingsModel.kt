@@ -13,6 +13,7 @@ import com.mie.kreaworkbench.ui.locale.str
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -121,7 +122,7 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
 
     fun clear(onDone: () -> Unit) = viewModelScope.launch {
         withContext(Dispatchers.IO) { c.cache.clearAll() }
-        c.engine.revision.value = c.engine.revision.value + 1
+        c.engine.revision.update { it + 1 }
         usage.value = 0
         onDone()
     }

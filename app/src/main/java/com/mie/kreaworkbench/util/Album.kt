@@ -12,6 +12,7 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.data.db.ImageRow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -105,24 +106,28 @@ fun saveImageIfNeeded(context: Context, row: ImageRow): SaveOutcome {
     }
 }
 
-suspend fun persistDelete(app: KreaApp, row: ImageRow, alsoServer: Boolean): String? {
+/**
+ * 删除一行的本地文件 + 数据库行（同事务写墓碑，防 needsWork 把删掉的产物当「没拿全」重下）。
+ *
+ * round19b：不再有「同时删除服务端文件」这个选项。直连 ComfyUI 之后手机端本来就没有删除远端
+ * 资源的能力（`ComfyApi.deleteRemoteImage` 一直是个空实现），删除弹窗上的那个勾选框是历史遗留，
+ * 已从图库与查看页一并下线；这里也不再有任何「服务端删除失败」的返回。
+ *
+ * [bumpRevision] = false 用于批量删除：整批删完由调用方统一 bump 一次（round19）。
+ * round18 的做法是「删第 1 张就 bump」，结果是 bump 把两个观察者的全表读叫起来之后，
+ * 第 2~5 张还在写库 —— 读游标与写事务在同一连接上并发，这正是那一版真机仍然闪退的时序。
+ * 现在调用方（`GalleryScreen.delete`）传 false，循环结束、写操作全部落地后才 `revision.update`。
+ */
+suspend fun persistDelete(app: KreaApp, row: ImageRow, bumpRevision: Boolean = true) {
     withContext(Dispatchers.IO) {
         File(row.localPath).delete()
         // 视频的首帧缩略图缓存（<视频名>.jpg）一并清掉，不留孤儿
-        if (row.kind == "video" && row.localPath.isNotBlank()) {
-            File(row.localPath + ".jpg").delete()
+        if (row.kind == "video") {
+            VideoThumb.thumbPath(row.localPath)?.delete()
         }
         app.container.db.tombstoneAndDelete(row)
     }
-    app.container.engine.revision.value = app.container.engine.revision.value + 1
-    if (!alsoServer) return null
-    if (row.remoteFilename.isBlank()) return app.str(R.string.err_no_remote)
-    return try {
-        app.container.api.deleteRemoteImage(row.remoteFilename, row.remoteSubfolder)
-        null
-    } catch (e: Exception) {
-        e.message ?: app.str(R.string.err_remote_delete)
-    }
+    if (bumpRevision) app.container.engine.revision.update { it + 1 }
 }
 
 fun shareImage(context: Context, file: File) {

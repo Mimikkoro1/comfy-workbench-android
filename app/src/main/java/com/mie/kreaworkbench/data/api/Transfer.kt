@@ -4,6 +4,7 @@ import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.util.mimeForVideo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -70,6 +71,19 @@ class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
      * 满 10 秒只由界面计时弹出选择，到点不取消这条请求；用户选压缩时由调用方取消协程。
      */
     suspend fun uploadOriginal(file: File, onProgress: (Float) -> Unit): Pair<String, String> =
+        withContext(Dispatchers.IO) {
+            val base = settings.baseUrl()
+            val body = ProgressBody(file, mimeFor(file)) { sent, total ->
+                if (total > 0) onProgress(sent.toFloat() / total.toFloat())
+            }
+            executeUpload(http, base, file, body)
+        }
+
+    /**
+     * 视频直传（round17）：单次尝试、不设 callTimeout、不压缩，网络重试由引擎负责。
+     * 字段同图片（image/type/input/subfolder=kwb_mobile/overwrite=false），走同一个 /upload/image。
+     */
+    suspend fun uploadVideo(file: File, onProgress: (Float) -> Unit): Pair<String, String> =
         withContext(Dispatchers.IO) {
             val base = settings.baseUrl()
             val body = ProgressBody(file, mimeFor(file)) { sent, total ->
@@ -299,6 +313,8 @@ private fun mimeFor(file: File): String = when (file.extension.lowercase(Locale.
     "png" -> "image/png"
     "webp" -> "image/webp"
     "gif" -> "image/gif"
+    // 视频（round17）：VHS 支持的扩展名 + avi；gif 仍是 image/gif（LoadImage 也认）
+    "mp4", "webm", "mov", "mkv", "avi" -> mimeForVideo(file.extension)
     else -> "application/octet-stream"
 }
 

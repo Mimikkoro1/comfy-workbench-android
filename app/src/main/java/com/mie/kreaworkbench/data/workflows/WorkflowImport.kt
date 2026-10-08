@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.data.workflows
 
+import androidx.annotation.VisibleForTesting
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.known
@@ -16,9 +17,10 @@ enum class FileKind { DEFINITION, API_WORKFLOW, UI_WORKFLOW, UNKNOWN }
 
 class ImportParseException(message: String) : Exception(message)
 
-private val KNOWN_TYPES = setOf(
+@VisibleForTesting
+internal val KNOWN_TYPES = setOf(
     "text", "prompt_pool", "select", "model", "int", "int_random",
-    "float", "bool", "image_sizes", "file:image",
+    "float", "bool", "image_sizes", "file:image", "file:video",
 )
 
 /** 按内容判断文件类型（PC 上工作流和定义同名，不能按文件名）。 */
@@ -207,14 +209,13 @@ fun outputKindOf(defJson: JSONObject): String {
     return "image"
 }
 
-/**
- * 抽卡只服务文生图：输出是图片，且没有任何参考图槽（file:image）。
- * 图生图、视频、打标（文本输出）以及其它输出类型一律 false。抽卡控件只许问这一个函数。
- */
+/** 抽卡只服务文生图：输出是图片，且没有任何参考图 / 参考视频槽（file:image / file:video）。
+ * 图生图、视频、打标（文本输出）以及其它输出类型一律 false。抽卡控件只许问这一个函数。 */
 fun isTextToImageWorkflow(outputKind: String, specs: Iterable<JSONObject>): Boolean {
     if (outputKind != "image") return false
     for (spec in specs) {
-        if (Specs.type(spec) == "file:image") return false
+        val t = Specs.type(spec)
+        if (t == "file:image" || t == "file:video") return false
     }
     return true
 }
@@ -267,6 +268,23 @@ fun videoSourceWarnLimit(spec: JSONObject): Pair<Int, Int> {
 
 // ---------- 校验（PC workflow_validator 规则，列出全部问题） ----------
 
+/**
+ * 统计 user_facing_inputs 里每种文件槽的数量：{"file:image": n, "file:video": m}，
+ * 没有的键为 0。纯函数，validateDefinition 与单测共用。
+ */
+fun fileSlotCounts(specs: JSONArray?): Map<String, Int> {
+    val counts = linkedMapOf("file:image" to 0, "file:video" to 0)
+    if (specs != null) {
+        for (i in 0 until specs.length()) {
+            val spec = specs.optJSONObject(i) ?: continue
+            when (Specs.type(spec)) {
+                "file:image", "file:video" -> counts[Specs.type(spec)] = (counts.getValue(Specs.type(spec))) + 1
+            }
+        }
+    }
+    return counts
+}
+
 /** 返回全部问题；空列表 = 通过。defJson 定义、wfJson API 工作流。 */
 fun validateDefinition(defJson: JSONObject, wfJson: JSONObject): List<String> {
     val problems = mutableListOf<String>()
@@ -291,7 +309,7 @@ fun validateDefinition(defJson: JSONObject, wfJson: JSONObject): List<String> {
         return problems
     }
 
-    var fileImageCount = 0
+    val slotCounts = fileSlotCounts(specs)
     val unsupported = mutableListOf<String>()
     for (i in 0 until specs.length()) {
         val spec = specs.optJSONObject(i) ?: continue
@@ -304,7 +322,6 @@ fun validateDefinition(defJson: JSONObject, wfJson: JSONObject): List<String> {
             unsupported.add(app.str(R.string.err_bad_type, label, type))
             continue
         }
-        if (type == "file:image") fileImageCount++
 
         val node = wfJson.optJSONObject(nid)
         if (node == null) {
@@ -331,7 +348,12 @@ fun validateDefinition(defJson: JSONObject, wfJson: JSONObject): List<String> {
             }
         }
     }
-    if (fileImageCount > 1) problems.add(app.str(R.string.err_one_image, fileImageCount))
+    if (slotCounts.getValue("file:image") > 1) {
+        problems.add(app.str(R.string.err_one_image, slotCounts.getValue("file:image")))
+    }
+    if (slotCounts.getValue("file:video") > 1) {
+        problems.add(app.str(R.string.err_one_video, slotCounts.getValue("file:video")))
+    }
     if (unsupported.isNotEmpty()) {
         problems.add(app.str(R.string.err_unsupported_types, unsupported.joinToString(app.str(R.string.list_sep))))
     }
@@ -398,6 +420,56 @@ private val LOADER_MAP = mapOf(
     "LatentUpscaleModelLoader" to ("model_name" to "放大模型"),
 )
 
+/** 视频上传槽（round17）：class 基名 → 视频文件字段。VHS_LoadVideoPath 等路径类不在表里。 */
+private val VIDEO_LOADER_FIELDS = mapOf(
+    "VHS_LoadVideo" to "video",
+    "VHS_LoadVideoFFmpeg" to "video",
+    "LoadVideo" to "file",
+)
+
+/** 参考视频槽的说明（knownText 有英文映射）。 */
+const val HELP_VIDEO_INPUT = "上传本次生成使用的视频。"
+
+/** VHS 读帧参数只对这两个上传类节点生效（baseClass 匹配）；核心 LoadVideo 没有。 */
+private val VHS_FRAME_PARAM_CLASSES = setOf("VHS_LoadVideo", "VHS_LoadVideoFFmpeg")
+
+/** 读帧参数 int 槽：medium / kwb_gen，默认勾选看 enabled。 */
+private fun intFrameSpec(
+    base: JSONObject,
+    value: Number,
+    nodeTitle: String,
+    label: String,
+    help: String,
+    min: Int,
+    max: Int,
+    enabled: Boolean,
+): JSONObject = base.put("type", "int").put("default", value.toLong()).put("kwb_gen", true)
+    .put("confidence", "medium").put("current_value", value)
+    .put("node_title", nodeTitle).put("enabled", enabled)
+    .put("min", min).put("max", max).put("step", 1)
+    .put("label", label).put("help", help)
+
+/** force_rate：JSON 整数写 int / Long，带小数写 float / Double。 */
+private fun frameSpecByValue(
+    base: JSONObject,
+    value: Number,
+    nodeTitle: String,
+    label: String,
+    help: String,
+    min: Int,
+    max: Int,
+    enabled: Boolean,
+): JSONObject {
+    val isFloat = value is Double || value is Float
+    return base.put("type", if (isFloat) "float" else "int")
+        .put("default", if (isFloat) value.toDouble() else value.toLong())
+        .put("kwb_gen", true)
+        .put("confidence", "medium").put("current_value", value)
+        .put("node_title", nodeTitle).put("enabled", enabled)
+        .put("min", min).put("max", max).put("step", 1)
+        .put("label", label).put("help", help)
+}
+
 /** 对 API 工作流的每个节点每个 input 按顺序推断，命中即停；返回按节点号+字段顺序的候选列表。 */
 fun inferSpecs(wf: JSONObject): List<Candidate> {
     val out = ArrayList<Candidate>()
@@ -408,10 +480,11 @@ fun inferSpecs(wf: JSONObject): List<Candidate> {
         val inputs = node.optJSONObject("inputs") ?: continue
         val nodeTitle = node.optJSONObject("_meta")?.optString("title").orEmpty()
             .ifBlank { classType }
+        val loraFileField = loraFileFieldOf(classType, inputs)
         val fieldKeys = inputs.keys().asSequence().toList()
         for (field in fieldKeys) {
             val value = inputs.opt(field) ?: continue
-            val spec = inferOne(nid, field, value, classType, nodeTitle) ?: continue
+            val spec = inferOne(nid, field, value, classType, nodeTitle, loraFileField) ?: continue
             out.add(Candidate(spec, nodeTitle))
         }
     }
@@ -468,7 +541,14 @@ private fun sameValue(a: Any?, b: Any?): Boolean = when {
 
 /** 推断单个 input；null = 不该暴露给用户。规则顺序见 PC wizard.infer_spec。
  *  附带运行时键 class_type（buildDefinition 保存时照旧剥离），供路 B combo 升级查 /object_info 用。 */
-private fun inferOne(nid: String, field: String, value: Any?, classType: String, nodeTitle: String): JSONObject? {
+private fun inferOne(
+    nid: String,
+    field: String,
+    value: Any?,
+    classType: String,
+    nodeTitle: String,
+    loraFileField: String? = null,
+): JSONObject? {
     // 1. 连线引用 [字符串, 整数]
     if (value is JSONArray && value.length() == 2 &&
         value.opt(0) is String && value.opt(1) is Number
@@ -487,11 +567,37 @@ private fun inferOne(nid: String, field: String, value: Any?, classType: String,
             .put("node_title", nodeTitle).put("enabled", true)
             .put("help", "上传本次生成使用的参考图片。")
     }
-    if (classType == "VHS_LoadVideo" && field == "video") {
+    // 视频槽（round17）：VHS_LoadVideo / VHS_LoadVideoFFmpeg / 核心 LoadVideo，baseClass 匹配
+    // 兼容「|xxx」后缀；两个同值节点由 mergeSameNameFields 合并成一个 spec + mirror_to。
+    if (VIDEO_LOADER_FIELDS[baseClass(classType)] == field) {
         return base.put("type", "file:video").put("default", value ?: "")
             .put("confidence", "high").put("current_value", value ?: "")
-            .put("node_title", nodeTitle).put("enabled", false)
-            .put("help", "本版不支持视频输入。")
+            .put("node_title", nodeTitle).put("enabled", true)
+            .put("label", "参考视频")
+            .put("help", HELP_VIDEO_INPUT)
+    }
+
+    // 3b. VHS 读帧参数（round17）：只对两个上传类 VHS 节点，值必须是数字（连线在规则 1 已滤掉）；
+    // 放在通用数字规则（8）之前。生成页只显示勾选了的行（默认勾「最多帧数」「跳过开头帧数」）。
+    if (value is Number && baseClass(classType) in VHS_FRAME_PARAM_CLASSES) {
+        val frameSpec = when {
+            field == "frame_load_cap" ->
+                intFrameSpec(base, value, nodeTitle, "最多帧数", "0 = 读取全部帧", 0, 100000, enabled = true)
+            field == "skip_first_frames" ->
+                intFrameSpec(base, value, nodeTitle, "跳过开头帧数", "从视频开头跳过的帧数", 0, 100000, enabled = true)
+            field == "select_every_nth" ->
+                intFrameSpec(base, value, nodeTitle, "每 N 帧取 1 帧", "1 = 每帧都取", 1, 100, enabled = false)
+            field == "force_rate" ->
+                frameSpecByValue(base, value, nodeTitle, "强制帧率", "0 = 保持原帧率", 0, 60, enabled = false)
+            field == "start_time" && baseClass(classType) == "VHS_LoadVideoFFmpeg" ->
+                base.put("type", "float").put("default", value.toDouble()).put("kwb_gen", true)
+                    .put("confidence", "medium").put("current_value", value)
+                    .put("node_title", nodeTitle).put("enabled", false)
+                    .put("min", 0).put("max", 100000).put("step", 0.1)
+                    .put("label", "开始时间（秒）").put("help", "从第几秒开始读")
+            else -> null
+        }
+        if (frameSpec != null) return frameSpec
     }
 
     // 4. 加载器模型字段（高，tier=model）
@@ -502,6 +608,15 @@ private fun inferOne(nid: String, field: String, value: Any?, classType: String,
                 .put("current_value", value ?: "").put("node_title", nodeTitle)
                 .put("enabled", true).put("label", label)
         }
+    }
+
+    // 4b. 第三方单 LoRA 加载器（round16）：类名含 lora、有数字强度字段、文件字段是字符串 →
+    //     产出与 LOADER_MAP 完全相同形状的 model spec（下拉选项照旧走 /object_info/<cls>）
+    if (loraFileField != null && field == loraFileField && value is String) {
+        return base.put("type", "model").put("default", value)
+            .put("tier", "model").put("confidence", "high")
+            .put("current_value", value).put("node_title", nodeTitle)
+            .put("enabled", true).put("label", "LoRA")
     }
 
     // 5. seed / noise_seed → int_random（高）
@@ -726,6 +841,10 @@ fun withAutoOutputNode(defJson: JSONObject, wfJson: JSONObject): JSONObject {
  */
 fun exportDefinition(defJson: JSONObject, saved: JSONObject): JSONObject {
     val out = JSONObject(defJson.toString())
+    // LoRA 开关 / 强度（round16）：last_values 里的私有键原样拷进导出定义顶层，没有就不动
+    // （保留 def 原有的）。PC 端忽略未知顶层键。
+    saved.optJSONObject("kwb_lora_on")?.let { out.put("kwb_lora_on", JSONObject(it.toString())) }
+    saved.optJSONObject("kwb_lora_strength")?.let { out.put("kwb_lora_strength", JSONObject(it.toString())) }
     val values = saved.optJSONObject("values") ?: JSONObject()
     val randoms = saved.optJSONObject("random") ?: JSONObject()
     val sizes = saved.optJSONArray("sizes")

@@ -2,6 +2,7 @@ package com.mie.kreaworkbench.ui.screens.gallery
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -43,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,7 +82,9 @@ import com.mie.kreaworkbench.ui.screens.gen.VideoThumbCell
 import com.mie.kreaworkbench.util.SaveOutcome
 import com.mie.kreaworkbench.util.persistDelete
 import com.mie.kreaworkbench.util.saveImageIfNeeded
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -93,18 +97,39 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
     var images by mutableStateOf<List<ImageRow>>(emptyList())
     var message by mutableStateOf("")
 
+    /** 当前列表里还存在的行 id（选中态收敛用，round18）。 */
+    val imagesIds: Set<Long> get() = images.mapTo(HashSet(images.size)) { it.id }
+
     init {
         viewModelScope.launch {
+            safeReload()
+            c.engine.revision.collect { safeReload() }
+        }
+    }
+
+    /**
+     * round19：收集器里必须就地吃掉异常。
+     * `viewModelScope` 没有 CoroutineExceptionHandler，`reload()` 抛出的任何异常都会直接终结进程
+     * ——上一轮真机就是这么死的（崩溃落在 CustomModel.reload 那条收集器上，而图库这边的
+     * delete/save 明明都兜过底，唯独漏了收集器这条主路径）。
+     */
+    private suspend fun safeReload() {
+        try {
             reload()
-            c.engine.revision.collect { reload() }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            Log.e(TAG, "reload failed", t)
         }
     }
 
     suspend fun reload() {
-        images = withContext(Dispatchers.IO) {
+        // 整个读取留在 IO 上（round18）：以前 withContext 只包住 db.images() 的返回，
+        // 调用方在主线程上等这次切换；列表一大就卡。
+        val loaded = withContext(Dispatchers.IO) {
             // 文本结果不进画廊（在生成页/查看页展示）；视频与图片都要求本地文件在
             c.db.images().filter { it.kind != "text" && File(it.localPath).exists() }
         }
+        images = loaded
     }
 
     fun save(ids: List<Long>, toast: (String) -> Unit, done: () -> Unit) {
@@ -113,19 +138,27 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
             var already = 0
             var saved = 0
             var failed = ""
-            withContext(Dispatchers.IO) {
-                ids.mapNotNull { c.db.image(it) }.forEach { row ->
-                    when (val outcome = saveImageIfNeeded(app, row)) {
-                        SaveOutcome.Already -> already++
-                        is SaveOutcome.Saved -> {
-                            c.db.markSaved(row.id, outcome.uri)
-                            saved++
+            // viewModelScope 没有异常处理器：这里任何未捕获异常 = 整个进程闪退。
+            // round18 真机就是这条路径上抛 CursorWindow 异常直接崩的，所以全兜底。
+            try {
+                withContext(Dispatchers.IO) {
+                    ids.mapNotNull { c.db.image(it) }.forEach { row ->
+                        when (val outcome = saveImageIfNeeded(app, row)) {
+                            SaveOutcome.Already -> already++
+                            is SaveOutcome.Saved -> {
+                                c.db.markSaved(row.id, outcome.uri)
+                                saved++
+                            }
+                            is SaveOutcome.Failed -> if (failed.isBlank()) failed = outcome.message
                         }
-                        is SaveOutcome.Failed -> if (failed.isBlank()) failed = outcome.message
                     }
                 }
+                reload()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                failed = t.message ?: t.javaClass.simpleName
+                Log.e(TAG, "save failed", t)
             }
-            reload()
             toast(
                 when {
                     failed.isNotBlank() && saved == 0 && already == 0 -> failed
@@ -137,29 +170,48 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun delete(ids: List<Long>, alsoServer: Boolean, toast: (String) -> Unit, done: () -> Unit) {
+    fun delete(ids: List<Long>, toast: (String) -> Unit, done: () -> Unit) {
         val app = getApplication<KreaApp>()
         viewModelScope.launch {
-            val rows = withContext(Dispatchers.IO) { ids.mapNotNull { c.db.image(it) } }
-            var serverErr: String? = null
-            rows.forEach { row ->
-                val err = persistDelete(app, row, alsoServer)
-                if (err != null && serverErr == null) serverErr = err
+            var failure = ""
+            try {
+                val rows = withContext(Dispatchers.IO) { ids.mapNotNull { c.db.image(it) } }
+                // round19：整批删完、写操作全部落地之后，才 bump 一次 revision。
+                // round18 是「删第 1 张就 bump」——bump 把两个观察者的全表读叫起来之后，
+                // 第 2~5 张还在写库，读游标与写事务在同一连接上并发，正是本轮真机崩溃的时序。
+                // 现在批量删除期间不再唤醒任何读观察者，这个最坏窗口从源头消失。
+                //
+                // round19b：删除只动手机本地。直连 ComfyUI 之后远端删除本来就是空操作
+                // （见 ComfyApi 老注释「ComfyUI 没有删文件接口」），弹窗里的服务器选项已下线，
+                // 这里不再有任何「服务端失败」分支。
+                rows.forEach { row -> persistDelete(app, row, bumpRevision = false) }
+                c.engine.revision.update { it + 1 }
+            } catch (t: Throwable) {
+                // 删不掉就报出来，不能把整个 App 带走
+                if (t is CancellationException) throw t
+                failure = t.message ?: t.javaClass.simpleName
+                Log.e(TAG, "delete failed", t)
             }
-            reload()
-            val serverMsg = serverErr
-            if (serverMsg != null) toast(app.str(R.string.gallery_deleted_server, serverMsg))
+            try {
+                reload()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                if (failure.isBlank()) failure = t.message ?: t.javaClass.simpleName
+                Log.e(TAG, "reload after delete failed", t)
+            }
+            if (failure.isNotBlank()) toast(app.str(R.string.err_delete_failed, failure))
             done()
         }
     }
 }
+
+private const val TAG = "kwb-gallery"
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: GalleryModel = viewModel()) {
     var selected by remember { mutableStateOf(setOf<Long>()) }
     var confirm by remember { mutableStateOf(false) }
-    var alsoServer by remember { mutableStateOf(false) }
     var cache by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
     // 三档分类（direct12）：全部 / 图片 / 视频；文本行本来就不进画廊
@@ -177,6 +229,12 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
     }
     val toaster = LocalToaster.current
     val layoutDirection = LocalLayoutDirection.current
+    // 列表与选中态同步（round18）：删除、缓存淘汰、引擎重下都会让行从列表里消失，
+    // 而 selected 只在 done() 里整体清空。中间的窗口里标题「已选 N」和保存/删除按钮
+    // 拿到的都是已经不存在的 id。这里按当前列表收敛一次。
+    LaunchedEffect(vm.images) {
+        if (selected.isNotEmpty()) selected = selected.filterTo(HashSet()) { it in vm.imagesIds }
+    }
     BackHandler(enabled = selecting) { selected = emptySet() }
     Box(Modifier.fillMaxSize()) {
         LargeBarScaffold(
@@ -289,25 +347,17 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
     }
     if (cache) CacheManagementSheet(onDismiss = { cache = false })
     if (confirm) {
+        // round19b：弹窗不再问「是否同时删除服务器上的文件」。直连 ComfyUI 之后手机端根本没有
+        // 删除远端资源的能力（ComfyApi.deleteRemoteImage 一直是个空实现），那个勾选框纯属历史遗留。
+        // 现在只做一次确认，并说清这一批要删几个文件。
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text(stringResource(R.string.gallery_delete_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.gallery_delete_body))
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = alsoServer, onCheckedChange = { alsoServer = it })
-                        Text(stringResource(R.string.gallery_delete_server))
-                    }
-                }
-            },
+            text = { Text(stringResource(R.string.gallery_delete_body, selected.size)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirm = false
-                    val server = alsoServer
-                    alsoServer = false
-                    vm.delete(selected.toList(), server, { notify(toaster, ctx, it) }) {
+                    vm.delete(selected.toList(), { notify(toaster, ctx, it) }) {
                         selected = emptySet()
                     }
                 }) { Text(stringResource(R.string.action_delete)) }

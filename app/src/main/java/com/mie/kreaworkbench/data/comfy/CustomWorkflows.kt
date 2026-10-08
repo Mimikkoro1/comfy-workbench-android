@@ -7,6 +7,7 @@ import com.mie.kreaworkbench.data.api.ApiException
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.WorkflowStore
+import com.mie.kreaworkbench.data.workflows.applyLoraStates
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.random.Random
@@ -34,6 +35,9 @@ suspend fun buildCustomWorkflows(ctx: Context, body: JSONObject): List<BuiltFlow
     val baseSeed = body.optLong("seed", 0L)
     val randomize = body.optBoolean("seed_random", true)
     val values = body.optJSONObject("values") ?: JSONObject()
+    // LoRA 开关 / 强度（round16）：老 body 没有这两个键 → null → 行为不变
+    val loraStates = body.optJSONObject("kwb_lora")
+    val loraStrengths = body.optJSONObject("kwb_lora_strength")
     val fixedPatches = Specs.fixedPatches(defJson)
 
     // 选中尺寸（image_sizes spec 的 values 是 "WxH" 数组）；没有 image_sizes spec 就单尺寸走 batch_count 张
@@ -91,6 +95,14 @@ suspend fun buildCustomWorkflows(ctx: Context, body: JSONObject): List<BuiltFlow
                             mirrorTo(spec, wf, name)
                         }
                     }
+                    // 参考视频（round17）：values 已被引擎写成 kwb_mobile/<name>；空值保持工作流原值
+                    "file:video" -> {
+                        val name = (raw as? String)?.trim().orEmpty()
+                        if (name.isNotBlank()) {
+                            inputs.put(field, name)
+                            mirrorTo(spec, wf, name)
+                        }
+                    }
                     "model" -> {
                         val name = (raw as? String)?.trim().takeUnless { it.isNullOrEmpty() }
                             ?: Specs.defaultText(spec).trim()
@@ -128,6 +140,8 @@ suspend fun buildCustomWorkflows(ctx: Context, body: JSONObject): List<BuiltFlow
                     }
                 }
             }
+            // LoRA 最后写（round16）：优先级 = 关闭(0) > 自动强度框 > 旧暴露参数 / mirror_to > 工作流原值
+            applyLoraStates(wf, loraStates, loraStrengths)
             result.add(BuiltFlow(seed = recordSeed, wf = wf, width = w.coerceAtLeast(0), height = h.coerceAtLeast(0)))
         }
     }

@@ -1,8 +1,11 @@
 package com.mie.kreaworkbench.ui.screens.custom
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -17,12 +20,26 @@ import com.mie.kreaworkbench.data.db.ImageRow
 import com.mie.kreaworkbench.data.db.JobRow
 import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
+import com.mie.kreaworkbench.data.workflows.LoraEntry
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_720P
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_SOURCE
+import com.mie.kreaworkbench.data.workflows.loraManagedSpecKeys
+import com.mie.kreaworkbench.data.workflows.loraStrengthKey
+import com.mie.kreaworkbench.data.workflows.loraEntries as loraEntriesOf
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.data.workflows.pickOutputNode
+import com.mie.kreaworkbench.data.workflows.resolveLoraOn
+import com.mie.kreaworkbench.data.workflows.resolveLoraStrength
 import com.mie.kreaworkbench.startGenerationService
+import com.mie.kreaworkbench.util.VIDEO_MAX_BYTES
+import com.mie.kreaworkbench.util.VideoThumb
+import com.mie.kreaworkbench.util.formatBytes
+import com.mie.kreaworkbench.util.pickableVideos
+import com.mie.kreaworkbench.util.probeFile
+import com.mie.kreaworkbench.util.probeUri
+import com.mie.kreaworkbench.util.stageVideoFile
+import com.mie.kreaworkbench.util.videoExtFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,11 +48,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.util.UUID
 
@@ -93,6 +112,21 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     private var workflowJson: JSONObject? = null
     private var boundId: String? = null
 
+    // LoRA 开关 / 强度（round16）：运行时从 workflow.json 识别，开关与强度按工作流持久化
+    var loraEntries by mutableStateOf(emptyList<LoraEntry>())
+        private set
+    var loraOn by mutableStateOf(emptyMap<String, Boolean>())
+        private set
+    var loraStrength by mutableStateOf(emptyMap<String, String>()) // strengthKey → 框文本
+        private set
+
+    /** 被自动强度框接管的旧暴露参数 spec key（设置页参数卡不再渲染） */
+    var loraManaged by mutableStateOf(emptySet<String>())
+        private set
+
+    // 当前绑定工作流的 definition.json（restore / restoreDefaults 读 def 顶层 kwb_lora_* 用）
+    private var defJson: JSONObject? = null
+
     // 表单值（key = "node|field"）
     var textValues by mutableStateOf(emptyMap<String, String>())
         private set
@@ -133,6 +167,25 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     var sourceUri by mutableStateOf<String?>(null)
     var srcW by mutableStateOf(0)
     var srcH by mutableStateOf(0)
+
+    // 参考视频（round17）：两个来源互斥（系统选择器 videoUri / 图库 videoPath），后选覆盖先选。
+    // 全部不持久化，与参考图一致；bind() 换绑时清空。
+    var videoUri by mutableStateOf<String?>(null)
+        private set
+    var videoPath by mutableStateOf<String?>(null)
+        private set
+    var videoName by mutableStateOf("")
+        private set
+    var videoSize by mutableStateOf(0L)
+        private set
+    var videoDurationMs by mutableStateOf(0L)
+        private set
+    var videoW by mutableStateOf(0)
+        private set
+    var videoH by mutableStateOf(0)
+        private set
+    var videoThumb by mutableStateOf<Bitmap?>(null)
+        private set
 
     /** 单尺寸化（direct10c）：尺寸恒为一个，张数只由 batch 决定。 */
     fun sizeCount(): Int = 1
@@ -187,6 +240,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         // 换绑时清掉上一个工作流残留的参考图选择（图片字段不持久化）
         sourcePath = null
         sourceUri = null
+        clearVideo()
         viewModelScope.launch {
             // ① 挂起的编辑先刷盘到旧工作流（目标必须是旧 id，此时 boundId 已指向新工作流）；
             //    刷盘失败不拦换绑，只是丢这次编辑
@@ -200,7 +254,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             //    首次绑定（previous==null，含进程重启后恢复绑定）不清：重启后还没换过工作流的文本卡要保住。
             if (previous != null) {
                 if (withContext(Dispatchers.IO) { c.db.purgeTextRows() } > 0) {
-                    c.engine.revision.value = c.engine.revision.value + 1
+                    c.engine.revision.update { it + 1 }
                 }
             }
             // ③ 再加载新工作流：restore 读到的一定是已把挂起编辑落盘后的 last_values.json
@@ -214,6 +268,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 }
                 val (wf, def) = pair
                 workflowJson = wf
+                defJson = def
                 displayName = c.workflowStore.labelOf(id) ?: id
                 outputNode = def.optString("kwb_output_node").ifBlank { pickOutputNode(wf) }
                 outputKind = outputKindOf(def)
@@ -223,7 +278,9 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                         arr.optJSONObject(i)?.let { add(it) }
                     }
                 }
+                loraEntries = loraEntriesOf(wf)
                 restore(id)
+                loraManaged = loraManagedSpecKeys(loraEntries, specs)
                 // 换绑先清上一工作流的选项映射，避免同名 key（node|field 可能撞）串台；
                 // 下面 loadChoices 失败的槽位就是「无选项 + 提示」，而不是残留旧值
                 modelChoices = emptyMap()
@@ -286,6 +343,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         textValues = t
         boolValues = b
         randomOn = r
+        // LoRA 开关 / 强度（round16）：saved.kwb_lora_on / kwb_lora_strength → 旧暴露参数的值 → def → 工作流原值
+        val def = defJson
+        loraOn = resolveLoraOn(loraEntries, saved, def)
+        loraStrength = resolveLoraStrength(loraEntries, specs, saved, def)
     }
 
     private fun trimNum(d: Double): String =
@@ -398,6 +459,13 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
         val randoms = JSONObject()
         randomOn.forEach { (k, v) -> randoms.put(k, v) }
+        // LoRA 私有键（round16）：不进 values（否则会被当成 spec 值）；强度只存合法有限的数字
+        val loraOnDoc = JSONObject()
+        loraOn.forEach { (k, v) -> loraOnDoc.put(k, v) }
+        val loraStrengthDoc = JSONObject()
+        loraStrength.forEach { (k, v) ->
+            v.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { loraStrengthDoc.put(k, it) }
+        }
         val doc = JSONObject()
             .put("values", values)
             .put("sizes", JSONArray(sizesSelected))
@@ -407,6 +475,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 "kwb_draw_filter",
                 JSONObject().put("cat", drawCat).put("inc", drawInc).put("exc", drawExc),
             )
+            .put("kwb_lora_on", loraOnDoc)
+            .put("kwb_lora_strength", loraStrengthDoc)
         c.workflowStore.saveValues(id, doc)
     }
 
@@ -439,6 +509,28 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     fun setFloatText(key: String, raw: String) {
         textValues = textValues + (key to raw.take(20))
+    }
+
+    // ---- LoRA 开关 / 强度（round16，设置页模型卡） ----
+
+    /** 该 model spec 是否对应一个单加载器 entry（有 → SpecRow 的 model 分支带开关和强度框）。 */
+    fun loraEntryForSpec(spec: JSONObject): LoraEntry? {
+        if (Specs.type(spec) != "model") return null
+        val nid = Specs.nodeId(spec)
+        val field = Specs.field(spec)
+        return loraEntries.firstOrNull { it.slot == null && it.nodeId == nid && it.fileField == field }
+    }
+
+    fun setLoraOn(key: String, on: Boolean) {
+        loraOn = loraOn + (key to on)
+        persist()
+    }
+
+    /** 照 setIntText 的风格过滤（数字 / . / -，take(20)）：非法文本留不到落盘，提交时用工作流原值兜底。 */
+    fun setLoraStrength(strengthKey: String, raw: String) {
+        val filtered = raw.filter { it.isDigit() || it == '.' || it == '-' }.take(20)
+        loraStrength = loraStrength + (strengthKey to filtered)
+        persist()
     }
 
     // ---- 抽卡共享筛选（决策 2，按工作流记忆在 kwb_draw_filter） ----
@@ -513,6 +605,68 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- 视频选择（file:video，round17）：系统选择器 / 图库两个来源，互斥，后选覆盖先选 ----
+
+    /** 系统选择器来源：content URI。元信息与首帧由 probeUri 读。 */
+    fun useVideoUri(uri: Uri) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val probe = withContext(Dispatchers.IO) { probeUri(app, uri) }
+            // 超上限直接拒绝（不设 videoUri）；取不到大小（-1）放行，generate 时按实际复制字节数再拦
+            if (probe.size > VIDEO_MAX_BYTES) {
+                message = app.str(R.string.video_too_large, formatBytes(VIDEO_MAX_BYTES))
+                return@launch
+            }
+            videoUri = uri.toString()
+            videoPath = null
+            videoName = probe.name.orEmpty()
+            videoSize = probe.size.takeIf { it > 0 } ?: 0L
+            videoDurationMs = probe.durationMs
+            videoW = probe.width
+            videoH = probe.height
+            videoThumb = probe.frame
+        }
+    }
+
+    /** 图库来源：本地文件路径。缩略图复用画廊的 `<视频>.jpg` 缓存（VideoThumb.thumbFile）。 */
+    fun useVideoPath(path: String) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val probe = withContext(Dispatchers.IO) { probeFile(path) }
+            // probe.size == -1 表示文件不存在（图库里已删除）：不选中
+            if (probe.size < 0) {
+                message = app.str(R.string.err_video_missing)
+                return@launch
+            }
+            if (probe.size > VIDEO_MAX_BYTES) {
+                message = app.str(R.string.video_too_large, formatBytes(VIDEO_MAX_BYTES))
+                return@launch
+            }
+            videoPath = path
+            videoUri = null
+            videoName = probe.name.orEmpty()
+            videoSize = probe.size
+            videoDurationMs = probe.durationMs
+            videoW = probe.width
+            videoH = probe.height
+            videoThumb = withContext(Dispatchers.IO) {
+                VideoThumb.thumbFile(path)?.let { BitmapFactory.decodeFile(it.absolutePath) }
+            } ?: probe.frame
+        }
+    }
+
+    /** 只清状态，不删任何文件（图库原文件 / 暂存副本都不动）。 */
+    fun clearVideo() {
+        videoUri = null
+        videoPath = null
+        videoName = ""
+        videoSize = 0L
+        videoDurationMs = 0L
+        videoW = 0
+        videoH = 0
+        videoThumb = null
+    }
+
     // ---- 抽卡（每个 text/prompt_pool 都可以；prompt_pool 带共享筛选，text 不带） ----
 
     fun draw(key: String) {
@@ -563,6 +717,9 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 textValues = t
+                // LoRA 开关 / 强度（round16）同属设置页：一并恢复（def 顶层 → 工作流原值）
+                loraOn = resolveLoraOn(loraEntries, null, def)
+                loraStrength = resolveLoraStrength(loraEntries, specs, null, def)
                 persistNow(boundId)
             } catch (e: Exception) {
                 message = e.message ?: e.javaClass.simpleName
@@ -609,6 +766,27 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 val firstRandom = specs.firstOrNull { Specs.type(it) == "int_random" }
                 val seed = firstRandom?.let { textValues[Specs.key(it)]?.toLongOrNull() ?: 0L } ?: 0L
                 val seedRandom = firstRandom?.let { randomOn[Specs.key(it)] ?: Specs.randomDefault(it) } ?: true
+                // LoRA 开关 / 强度（round16）：框文本非法或空时放工作流原值，保证发出去的一定是数字；
+                // 关着的 entry 也照常带强度（applyLoraStates 会忽略），便于续传 / 重试时状态一致
+                var loraStates: JSONObject? = null
+                var loraStrengths: JSONObject? = null
+                if (loraEntries.isNotEmpty()) {
+                    val keys = loraEntries.map { it.key }.toSet()
+                    val states = JSONObject()
+                    loraOn.forEach { (k, v) -> if (k in keys) states.put(k, v) }
+                    val strengths = JSONObject()
+                    for (e in loraEntries) {
+                        for (f in e.strengthFields) {
+                            val sk = loraStrengthKey(e.key, f)
+                            val v = loraStrength[sk]?.toDoubleOrNull()?.takeIf { it.isFinite() }
+                                ?: e.strengthDefaults[f]
+                                ?: continue
+                            strengths.put(sk, v)
+                        }
+                    }
+                    if (states.length() > 0) loraStates = states
+                    if (strengths.length() > 0) loraStrengths = strengths
+                }
                 val body = buildCustomBody(
                     clientId = jobClientId,
                     workflowId = id,
@@ -621,10 +799,23 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     outputKind = outputKind,
                     workflowName = displayName.takeIf { it.isNotBlank() && it != id }
                         ?: c.workflowStore.labelOf(id).orEmpty(),
+                    loraStates = loraStates,
+                    loraStrengths = loraStrengths,
                 )
                 // 参考图：按原样暂存直传（与图生图一致，压缩只在上传超时/失败且用户确认后进行）；
                 // 暂存文件名跟任务 id 走，避免同工作流两个任务共用/互删同一个 uploads 文件
                 val hasImageSpec = specs.any { Specs.type(it) == "file:image" }
+                val hasVideoSpec = specs.any { Specs.type(it) == "file:video" }
+                if (hasVideoSpec) {
+                    if (videoUri == null && videoPath == null) {
+                        message = getApplication<Application>().str(R.string.err_need_video)
+                        return@launch
+                    }
+                    // 返回 null = stageVideo 已给 message，不提交
+                    val staged = withContext(Dispatchers.IO) { stageVideo(getApplication(), jobClientId) }
+                        ?: return@launch
+                    body.put("local_video", staged.absolutePath)
+                }
                 if (hasImageSpec) {
                     if (sourcePath == null && sourceUri == null) {
                         message = getApplication<Application>().str(R.string.err_need_reference)
@@ -645,7 +836,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 val now = System.currentTimeMillis()
                 withContext(Dispatchers.IO) {
                     c.db.insertJob(
-                        JobRow(jobClientId, "", "custom", if (hasImageSpec) "uploading" else "pending", body.toString(), now, now, totalCount(), 0, ""),
+                        JobRow(jobClientId, "", "custom", if (hasImageSpec || hasVideoSpec) "uploading" else "pending", body.toString(), now, now, totalCount(), 0, ""),
                     )
                 }
                 persistNow(boundId)
@@ -671,6 +862,70 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, o)
         return o.outWidth to o.outHeight
+    }
+
+    /**
+     * 视频暂存（round17）：系统选择器与图库两种来源都复制一份到 filesDir/uploads/<jobId>_video.<ext>。
+     * local_video 只能指向这个副本——引擎上传成功 / 取消 / 清理会删它，绝不能指向图库原文件。
+     * 返回 null = 已设置 message，调用方不提交。
+     */
+    private suspend fun stageVideo(app: Application, id: String): File? {
+        val dir = File(app.filesDir, "uploads").apply { mkdirs() }
+        return withContext(Dispatchers.IO) {
+            var out: File? = null
+            try {
+                if (videoUri != null) {
+                    val uri = Uri.parse(videoUri)
+                    val ext = videoExtFor(queryDisplayName(app, uri), try {
+                        app.contentResolver.getType(uri)
+                    } catch (_: Exception) {
+                        null
+                    })
+                    val dest = File(dir, "${id}_video.$ext")
+                    out = dest
+                    val input = app.contentResolver.openInputStream(uri)
+                    if (input == null) {
+                        message = app.str(R.string.err_video_missing)
+                        return@withContext null
+                    }
+                    input.use { ins ->
+                        FileOutputStream(dest).use { outs -> ins.copyTo(outs) }
+                    }
+                } else {
+                    val src = File(videoPath.orEmpty())
+                    if (!src.isFile) {
+                        message = app.str(R.string.err_video_missing)
+                        return@withContext null
+                    }
+                    val ext = videoExtFor(src.name, null)
+                    out = File(dir, "${id}_video.$ext")
+                    stageVideoFile(src, dir, id, ext)
+                }
+                // 选择时拿不到大小的情况：按实际复制字节数再拦一次
+                if (out.length() > VIDEO_MAX_BYTES) {
+                    out.delete()
+                    message = app.str(R.string.video_too_large, formatBytes(VIDEO_MAX_BYTES))
+                    return@withContext null
+                }
+                out
+            } catch (e: FileNotFoundException) {
+                out?.delete()
+                message = app.str(R.string.err_video_missing)
+                null
+            } catch (e: Exception) {
+                out?.delete()
+                message = app.str(R.string.err_video_stage, e.message ?: e.javaClass.simpleName)
+                null
+            }
+        }
+    }
+
+    private fun queryDisplayName(app: Application, uri: Uri): String? = try {
+        app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (_: Exception) {
+        null
     }
 
     private fun stageOriginal(app: Application, id: String): File {
@@ -723,7 +978,25 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     fun answerUploadAsk(clientId: String, compress: Boolean) = c.engine.answerUploadAsk(clientId, compress)
 
+    /**
+     * round19：收集器里的异常必须就地吃掉，不能让「读失败」升级成「闪退」。
+     *
+     * `viewModelScope` 没有 CoroutineExceptionHandler——上一轮真机崩溃正是发生在
+     * `c.engine.revision.collect { reload() }` 这条路径上：`GalleryDb.kt:436` 的
+     * `IllegalStateException: Couldn't read row N from CursorWindow` 一路冒到线程顶，
+     * 直接终结进程（不是什么「图库崩了」，是整个 App 死）。
+     */
+    private suspend fun safeReload() {
+        try {
+            reload()
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            Log.e(TAG, "reload failed", t)
+        }
+    }
+
     private suspend fun reload() {
+        // 整个读取留在 IO 上（round18）：调用方是 revision 收集器，列表大时不能占着主线程
         val loaded = withContext(Dispatchers.IO) {
             // 文本结果没有本地文件（内容在行里），不能按文件存在过滤掉
             c.db.images().filter { it.kind == "text" || File(it.localPath).exists() }
@@ -735,6 +1008,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     /** 「从图库选择」参考图网格的数据源：只要图片行（文本行没有文件、视频不能当参考图）。 */
     fun pickerImages(): List<ImageRow> = gallery.filter { it.kind == "image" }
+
+    /** 参考视频「从图库选择」的数据源（round17）：只列 localPath 非空且文件还在的视频行。 */
+    fun pickerVideos(): List<ImageRow> =
+        pickableVideos(gallery).filter { File(it.localPath).isFile }
 
     /** 最近文本结果（生成页大卡；最多 4 条）。文本卡不做长期保留：保留到切换工作流，bind() 换绑时统一清空。 */
     fun textResults(): List<ImageRow> = gallery.filter { it.kind == "text" }.take(4)
@@ -779,8 +1056,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            reload()
-            c.engine.revision.collect { reload() }
+            safeReload()
+            c.engine.revision.collect { safeReload() }
         }
         // 当前提示词库变化（导入/切换/删除）时刷新抽卡筛选的分类列表（自 T2iModel 移植）
         viewModelScope.launch {
@@ -790,3 +1067,5 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
     }
 }
+
+private const val TAG = "kwb-custom"

@@ -18,6 +18,8 @@ fun buildCustomBody(
     outputNode: String,
     outputKind: String = "image",
     workflowName: String = "",
+    loraStates: JSONObject? = null,
+    loraStrengths: JSONObject? = null,
 ): JSONObject = JSONObject()
     .put("client_job_id", clientId)
     .put("mode", "custom")
@@ -31,3 +33,6 @@ fun buildCustomBody(
     .put("values", values)
     // 仅供图片信息页显示「用的哪个工作流」（paramsJson = 提交 body）；服务端/构图不读这个键
     .apply { if (workflowName.isNotBlank()) put("workflow_name", workflowName.take(200)) }
+    // LoRA 开关 / 强度（round16）：服务端不读，只有 buildCustomWorkflows 用；老 body 无这些键 → 不变
+    .apply { if (loraStates != null && loraStates.length() > 0) put("kwb_lora", loraStates) }
+    .apply { if (loraStrengths != null && loraStrengths.length() > 0) put("kwb_lora_strength", loraStrengths) }

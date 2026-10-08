@@ -1,0 +1,5 @@
+{
+  "1": {"class_type": "VHS_LoadVideo", "_meta": {"title": "Load Video"}, "inputs": {"video": "example_input.mp4", "force_rate": 0, "custom_width": 0, "custom_height": 0, "frame_load_cap": 81, "skip_first_frames": 0, "select_every_nth": 1, "format": "AnimateDiff"}},
+  "2": {"class_type": "ImageScaleBy", "inputs": {"image": ["1", 0], "upscale_method": "lanczos", "scale_by": 2.0}},
+  "3": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["2", 0], "audio": ["1", 2], "frame_rate": 16, "loop_count": 0, "filename_prefix": "v2v", "format": "video/h264-mp4", "pix_fmt": "yuv420p", "crf": 19, "save_metadata": true, "trim_to_audio": false, "pingpong": false, "save_output": true}}
+}
