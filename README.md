@@ -4,7 +4,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE) [![Android CI](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml)
 
-**Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。电脑上把 ComfyUI 工作流导出成 API 格式，手机里导入，参数变成几个输入框：提示词、种子、尺寸、参考图。点一下就提交到你自己的 ComfyUI。
+**Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。电脑上把 ComfyUI 工作流导出成 API 格式，手机里导入，参数变成几个输入框：提示词、种子、尺寸、参考图、一条参考视频。点一下就提交到你自己的 ComfyUI。
 
 它不是手机上的节点编辑器，也不替代 ComfyUI 网页端。节点和连线留在电脑上，手机只负责出图。
 
@@ -13,7 +13,9 @@
 ## 它做什么
 
 - **直连你的 ComfyUI**：HTTP + WebSocket，实时进度，没有云端中转。提示词、参数、图片只经过手机和你自己的机器
-- **工作流变操作面板**：导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图映射成手机控件。提示词识别 CLIPTextEncode 和 Qwen 等 TextEncode 节点；内置 11 个尺寸预设（含 9:16 竖屏）。示例在 `docs/example-workflows/`
+- **断线任务还在**：提交前先落库。进度条可以断，任务以队列和历史为准，重连后继续查，不靠那条 WebSocket 活着
+- **工作流变操作面板**：导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图、一条参考视频映射成手机控件。提示词识别 CLIPTextEncode 和 Qwen 等 TextEncode 节点；内置 11 个尺寸预设（含 9:16 竖屏）。示例在 `docs/example-workflows/`
+- **LoRA**：导入后可以单独开关、调强度，不用回电脑改节点
 - **提示词库**：分类取词、随机抽卡、保存和编辑
 - **画廊**：图片 / 视频统一浏览，可放大、可播放。结果只进 App 图库，**不自动写入系统相册**，要留的再手动保存或分享
 - **后台跑完**：生成和下载走前台服务，锁屏或切走不会中断，通知栏能看到进度
@@ -26,7 +28,7 @@
 
 - 不能在手机上连线、改节点、搭新图。要改结构，回 ComfyUI 网页端改完再导出
 - 只吃 **API 格式** JSON。网页端默认的 `nodes` / `links` 工作流要先用「Export (API)」导出
-- 视频文件输入本版不支持。图生视频可以，输入是参考图，不是一条视频
+- 参考视频只支持一条。多条视频槽导入时会拦住
 - 面板控件来自工作流里的字面量参数。已经连到别的节点的输入不会再暴露出来
 - 自定义尺寸会按 16 的倍数对齐（最小 64）。不是 16 的倍数会被改小
 
@@ -105,13 +107,15 @@ gradlew.bat assembleRelease
 
 ## English
 
-**Comfy Workbench** is a native Android app for a workflow you already finished on your PC. Export it as API-format JSON, import it on the phone, and the parameters become a few fields: prompt, seed, size, reference image. Tap once. It submits to your own ComfyUI over HTTP + WebSocket. No cloud in between.
+**Comfy Workbench** is a native Android app for a workflow you already finished on your PC. Export it as API-format JSON, import it on the phone, and the parameters become a few fields: prompt, seed, size, reference image, or one reference video. Tap once. It submits to your own ComfyUI over HTTP + WebSocket. No cloud in between.
 
 It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay on the computer. The phone only runs them.
 
+- A dropped connection does not drop the job. The task is stored before submit; progress may disconnect, and status comes from the queue and history
 - Prompts are detected on CLIPTextEncode and TextEncode-style nodes such as Qwen; 11 built-in size presets including 9:16
+- LoRA toggles and strengths can be changed on the phone after import
 - API-format workflows only. The default `nodes` / `links` file must be exported with Export (API) first
-- No video-file input in this version. Image-to-video is supported; the input is a reference image
+- One reference video. Imports with more than one video slot are rejected
 - Linked inputs are not exposed. Only literal parameters become controls
 - Custom sizes are aligned down to a multiple of 16 (minimum 64)
 - Android 8.0+. The release APK is a universal build (arm64-v8a / armeabi-v7a / x86 / x86_64)
