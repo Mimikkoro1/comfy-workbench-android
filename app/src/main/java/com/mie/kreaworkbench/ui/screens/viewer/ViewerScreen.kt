@@ -11,8 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,27 +21,27 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,12 +58,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.core.Animatable
@@ -78,8 +76,10 @@ import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.Download
 import com.composables.icons.lucide.Info
+import com.composables.icons.lucide.Library
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Palette
+import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Share2
 import com.composables.icons.lucide.Trash2
 import java.text.SimpleDateFormat
@@ -88,10 +88,18 @@ import java.util.Locale
 import org.json.JSONObject
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.startGenerationService
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.data.db.ImageRow
+import com.mie.kreaworkbench.data.db.JobRow
+import com.mie.kreaworkbench.data.regenerateBody
+import com.mie.kreaworkbench.ui.components.GlassAlertDialog
+import com.mie.kreaworkbench.ui.components.GlassBottomSheet
+import com.mie.kreaworkbench.ui.components.GlassDanger
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.LocalGlassDismiss
 import com.mie.kreaworkbench.ui.components.LocalToaster
-import com.mie.kreaworkbench.ui.components.TextResultActions
+import com.mie.kreaworkbench.ui.components.SaveToLibrarySheet
 import com.mie.kreaworkbench.ui.components.glass
 import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
 import com.mie.kreaworkbench.ui.components.notify
@@ -108,6 +116,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
@@ -134,7 +143,12 @@ fun ViewerScreen(
     var rows by remember { mutableStateOf<List<ImageRow>>(emptyList()) }
     var originId by remember { mutableLongStateOf(-1L) }
     LaunchedEffect(ids) {
-        rows = withContext(Dispatchers.IO) { ids.mapNotNull { app.container.db.image(it) } }
+        // r29.1：文本结果留在生成主页预览区，不再进二级看图壳。
+        // 这里把 text 行滤掉（任何入口误推进来也只会是空列表 → 直接返回），
+        // 图/视频二级页保持原样（含 PhotoBackdrop 黑窗）。
+        rows = withContext(Dispatchers.IO) {
+            ids.mapNotNull { app.container.db.image(it) }.filter { it.kind != "text" }
+        }
         if (originId < 0 && rows.isNotEmpty()) {
             originId = rows[start.coerceIn(0, rows.lastIndex)].id
         }
@@ -145,6 +159,7 @@ fun ViewerScreen(
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
+    var regenAsk by remember { mutableStateOf(false) }
     var pull by remember { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -156,6 +171,9 @@ fun ViewerScreen(
     val pager = rememberPagerState(start.coerceIn(0, rows.lastIndex)) { rows.size }
     val current = rows[pager.currentPage.coerceIn(0, rows.lastIndex)]
     val saved = current.savedToAlbum && albumUriExists(context, current.albumUri)
+    val canRegen = remember(current.paramsJson) {
+        runCatching { JSONObject(current.paramsJson).optString("workflow_id").isNotBlank() }.getOrDefault(false)
+    }
     val bgAlpha = (1f - abs(pull) / 600f).coerceIn(0f, 1f)
     val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val spatial = MaterialTheme.motionScheme.fastSpatialSpec<IntOffset>()
@@ -175,11 +193,6 @@ fun ViewerScreen(
                         path = row.localPath,
                         active = page == pager.currentPage,
                         chromeVisible = chrome,
-                        onToggleChrome = { chrome = !chrome },
-                    )
-                    "text" -> TextPage(
-                        row = row,
-                        app = app,
                         onToggleChrome = { chrome = !chrome },
                     )
                     else -> ZoomImage(
@@ -273,14 +286,61 @@ fun ViewerScreen(
                             }
                         }
                     }
+                    if (canRegen) {
+                        IconButton(onClick = { regenAsk = true }) {
+                            Icon(Lucide.RefreshCw, stringResource(R.string.viewer_regen), tint = PhotoOnBackdrop)
+                        }
+                    }
                     IconButton(onClick = { confirm = true }) { Icon(Lucide.Trash2, stringResource(R.string.action_delete), tint = PhotoOnBackdrop) }
                 }
             }
         }
     }
     if (info) InfoSheet(current) { info = false }
+    if (regenAsk) {
+        GlassAlertDialog(
+            onDismissRequest = { regenAsk = false },
+            title = { Text(stringResource(R.string.viewer_regen)) },
+            text = { Text(stringResource(R.string.viewer_regen_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    regenAsk = false
+                    val row = current
+                    scope.launch {
+                        val id = UUID.randomUUID().toString()
+                        val body = regenerateBody(row.paramsJson, row.prompt, row.width, row.height, id)
+                        if (body == null) {
+                            notify(toaster, context, context.str(R.string.viewer_regen_unavailable))
+                            return@launch
+                        }
+                        val now = System.currentTimeMillis()
+                        val uploading = body.optString("local_jpeg").isNotBlank() || body.optString("local_video").isNotBlank()
+                        withContext(Dispatchers.IO) {
+                            app.container.db.insertJob(
+                                JobRow(
+                                    id,
+                                    "",
+                                    body.optString("mode").ifBlank { "custom" },
+                                    if (uploading) "uploading" else "pending",
+                                    body.toString(),
+                                    now,
+                                    now,
+                                    1,
+                                    0,
+                                    "",
+                                ),
+                            )
+                        }
+                        startGenerationService(context)
+                        notify(toaster, context, context.str(R.string.viewer_regen_queued))
+                    }
+                }) { Text(stringResource(R.string.viewer_regen)) }
+            },
+            dismissButton = { TextButton(onClick = { regenAsk = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
     if (confirm) {
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirm = false },
             title = {
                 Text(
@@ -304,7 +364,7 @@ fun ViewerScreen(
                         rows = next
                         if (next.isEmpty()) onBack()
                     }
-                }) { Text(stringResource(R.string.action_delete)) }
+                }) { Text(stringResource(R.string.action_delete), color = GlassDanger) }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
@@ -344,57 +404,21 @@ private fun shareRow(context: Context, row: ImageRow) {
     }
 }
 
-/** 文本结果页（round6）：可滚动可选中，带复制/存库（不删数据，文本卡由换绑工作流时统一清空）。点空白切换工具条。 */
-@Composable
-private fun TextPage(
-    row: ImageRow,
-    app: KreaApp,
-    onToggleChrome: () -> Unit,
-) {
-    val press = remember { MutableInteractionSource() }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(PhotoBackdrop)
-            .clickable(interactionSource = press, indication = null, onClick = onToggleChrome),
-    ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 72.dp),
-        ) {
-            Text(
-                stringResource(R.string.text_result),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = PhotoOnBackdrop,
-            )
-            Spacer(Modifier.height(12.dp))
-            SelectionContainer {
-                Text(row.text, color = PhotoOnBackdrop, style = MaterialTheme.typography.bodyMedium)
-            }
-            Spacer(Modifier.height(20.dp))
-            TextResultActions(text = row.text, app = app)
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InfoSheet(row: ImageRow, onClose: () -> Unit) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
+    val scope = rememberCoroutineScope()
+    val app = context.applicationContext as KreaApp
+    val libraries by app.container.library.libraries.collectAsState()
+    var showSave by remember { mutableStateOf(false) }
     val maxPrompt = LocalConfiguration.current.screenHeightDp.dp * 0.45f
-    val ink = MaterialTheme.colorScheme.onSurface
+    // r27：弹层在玻璃层里，墨色固定白（不再跟主题色，否则浅色主题下深字压深底看不见）
+    val ink = ImmersiveInk
     val emptyPrompt = stringResource(R.string.prompt_empty)
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    ) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp)) {
+    GlassBottomSheet(onDismissRequest = onClose) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 16.dp)) {
             if (row.kind == "text") {
                 Text(stringResource(R.string.text_result), style = MaterialTheme.typography.titleSmall, color = ink)
                 Spacer(Modifier.height(8.dp))
@@ -406,13 +430,15 @@ private fun InfoSheet(row: ImageRow, onClose: () -> Unit) {
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.label_prompt), style = MaterialTheme.typography.titleSmall, color = ink, modifier = Modifier.weight(1f))
-                    TextButton(onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("prompt", row.prompt))
-                        notify(toaster, context, context.str(R.string.copied))
-                    }) {
-                        Icon(Lucide.Copy, null)
-                        Text(stringResource(R.string.action_copy))
+                    if (row.prompt.isNotBlank()) {
+                        PromptAction(Lucide.Library, stringResource(R.string.action_library_add)) {
+                            showSave = true
+                        }
+                        PromptAction(Lucide.Copy, stringResource(R.string.action_copy)) {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("prompt", row.prompt))
+                            notify(toaster, context, context.str(R.string.copied))
+                        }
                     }
                 }
                 SelectionContainer {
@@ -454,8 +480,44 @@ private fun InfoSheet(row: ImageRow, onClose: () -> Unit) {
                     Text(stringResource(R.string.info_created_at, formatted), color = ink)
                 }
             }
-            TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) }
+            val close = LocalGlassDismiss.current
+            TextButton(onClick = { close() }) { Text(stringResource(R.string.action_close)) }
         }
+    }
+    if (showSave) {
+        SaveToLibrarySheet(
+            libraries = libraries,
+            onDismiss = { showSave = false },
+        ) { libId, newName ->
+            // 与全屏提示词编辑同一条路径：createLibrary / addEntry 都不改当前库。
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        val id = libId ?: app.container.library.createLibrary(newName)
+                        app.container.library.addEntry(id, row.prompt)
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                notify(
+                    toaster,
+                    context,
+                    context.str(if (ok) R.string.saved_to_library else R.string.err_save_to_library),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PromptAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge)
     }
 }
 

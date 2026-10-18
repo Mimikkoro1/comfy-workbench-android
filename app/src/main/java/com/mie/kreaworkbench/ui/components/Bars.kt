@@ -22,6 +22,10 @@ import com.composables.icons.lucide.Lucide
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.theme.pageBackground
 
+/**
+ * [immersive] = 压在大图/深色底上的页面（如 r27 图库）：白字、深色玻璃、白图标。
+ * 默认关闭，其他页面保持原来的主题色。
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun LargeBarScaffold(
@@ -29,15 +33,18 @@ fun LargeBarScaffold(
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     blur: Boolean = false,
+    immersive: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val scheme = MaterialTheme.colorScheme
     val barColor = if (blur) Color.Transparent else pageBackground()
-    val fallback = scheme.surfaceContainerLow.copy(alpha = 0.92f)
+    val fallback = if (immersive) ImmersiveGlassFallback else scheme.surfaceContainerLow.copy(alpha = 0.92f)
+    val tint = if (immersive) ImmersiveGlassTint else null
+    val ink = if (immersive) ImmersiveInk else scheme.primary
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        containerColor = pageBackground(),
+        containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             LargeFlexibleTopAppBar(
@@ -45,13 +52,17 @@ fun LargeBarScaffold(
                     Text(
                         title,
                         style = MaterialTheme.typography.headlineMediumEmphasized,
-                        color = scheme.primary,
+                        color = ink,
                     )
                 },
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack) {
-                            Icon(Lucide.ArrowLeft, contentDescription = stringResource(R.string.action_back))
+                            Icon(
+                                Lucide.ArrowLeft,
+                                contentDescription = stringResource(R.string.action_back),
+                                tint = if (immersive) ImmersiveInk else scheme.onSurface,
+                            )
                         }
                     }
                 },
@@ -60,11 +71,11 @@ fun LargeBarScaffold(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = barColor,
                     scrolledContainerColor = barColor,
-                    titleContentColor = scheme.primary,
-                    navigationIconContentColor = scheme.onSurface,
-                    actionIconContentColor = scheme.primary,
+                    titleContentColor = ink,
+                    navigationIconContentColor = if (immersive) ImmersiveInk else scheme.onSurface,
+                    actionIconContentColor = ink,
                 ),
-                modifier = if (blur) Modifier.glass(fallback) else Modifier,
+                modifier = if (blur) Modifier.glass(fallback, tint = tint) else Modifier,
             )
         },
         content = content,

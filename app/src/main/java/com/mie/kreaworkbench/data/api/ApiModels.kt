@@ -4,12 +4,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** network=true 可自动重试；auth=true 是凭据问题（401），调用方应提示而非重试。
- *  code 是 HTTP 状态码（非 HTTP 来源的异常为 0）：调用方据此区分 404（资源不存在）与其他失败。 */
+ *  code 是 HTTP 状态码（非 HTTP 来源的异常为 0）：调用方据此区分 404（资源不存在）与其他失败。
+ *  unreachable=true（round31）表示连接压根没建立：拒连 / 域名解析不了 / 无路由 / 连接超时。
+ *  这类错误重试也不会自己好，提交阶段据此立刻判失败，而不是拖满重试窗口后 pause 假死。 */
 class ApiException(
     message: String,
     val network: Boolean = false,
     val auth: Boolean = false,
     val code: Int = 0,
+    val unreachable: Boolean = false,
 ) : Exception(message)
 
 data class RemoteImage(

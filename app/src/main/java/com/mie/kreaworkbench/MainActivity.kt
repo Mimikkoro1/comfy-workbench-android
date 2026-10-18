@@ -109,8 +109,8 @@ class MainActivity : AppCompatActivity() {
             val settings by app.container.settings.flow.collectAsState(initial = UserSettings())
             KreaTheme(settings.themeMode, settings.dynamicColor, settings.amoled) {
                 val nav: NavModel = viewModel()
-                // round14：GitHub 新版本对话框（自动检查或关于页手动检查后弹；独立窗口，放哪都行）
-                com.mie.kreaworkbench.ui.components.UpdateDialog()
+                // round14：GitHub 新版本对话框（自动检查或关于页手动检查后弹）。
+                // r29 起是玻璃弹层，挂在 AppNav 的 GlassHostProvider 里（这里不再画）。
                 val haze = rememberHazeState()
                 val blur = settings.blurEnabled && Build.VERSION.SDK_INT >= 31
                 CompositionLocalProvider(

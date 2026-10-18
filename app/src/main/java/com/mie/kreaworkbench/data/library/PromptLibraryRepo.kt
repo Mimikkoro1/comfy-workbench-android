@@ -295,7 +295,9 @@ class PromptLibraryRepo(private val ctx: Context) {
     }
 
     /**
-     * 新建空库（文本结果「存入提示词库」用）并设为当前；返回新库 id。
+     * 新建空库（提示词框 / 文本结果「存入提示词库」用）；**不**改变「当前」提示词库（r21）。
+     * 用户显式切换走 setCurrent（库页点击）；导入流程（importLibrary）导入后设当前，语义不变。
+     * 若未来某入口需要「新建即用」，再加 setAsCurrent 参数，别在默认路径切库。
      */
     suspend fun createLibrary(name: String): String = locked {
         ensureLoadedLocked()
@@ -305,19 +307,18 @@ class PromptLibraryRepo(private val ctx: Context) {
         // 存入提示词库新建的库是无格式库（addEntry 条目全空字段）→ 固定 txt（round8 2.0）
         val meta = LibraryMeta(id = id, name = name, count = 0, importedAt = System.currentTimeMillis(), fmt = FMT_TXT)
         val libs = (_libraries.value + meta).sortedByDescending { it.importedAt }
-        writeIndexLocked(libs, id)
+        // current 保持原「当前」库不变；抽卡缓存不需要动（新库不是当前库）
+        writeIndexLocked(libs, _currentId.value)
         _libraries.value = libs
-        _currentId.value = id
-        cachedEntries = emptyList()
-        cachedForId = id
         id
     }
 
     /**
-     * 向指定库追加一条（round6 文本结果存库）；库不存在返回 false。
+     * 向指定库追加一条（round6 文本结果 / 提示词框存库）；库不存在返回 false。
      * 只要求 prompt 非空，title/category/tags 缺省，格式与导入条目一致。
-     * 与 createLibrary 一致：写入成功后把该库设为当前库——当前库从空变非空时，
-     * 生成页的抽卡 UI（hasPromptLibrary）随之自动出现。
+     * r21：写入成功后**不**改「当前」提示词库（以前会切到刚写的库，把生成页的抽卡库
+     * 悄悄换掉）。只更新该库的 count 与索引；写的就是当前库时才刷新抽卡缓存，
+     * 写别的库不碰缓存（缓存属于当前库）。
      */
     suspend fun addEntry(libId: String, prompt: String, title: String = "", category: String = "", tags: List<String> = emptyList()): Boolean = locked {
         ensureLoadedLocked()
@@ -342,11 +343,12 @@ class PromptLibraryRepo(private val ctx: Context) {
         f.writeText(arr.toString())
         val libs = _libraries.value.map { if (it.id == libId) it.copy(count = it.count + 1) else it }
         _libraries.value = libs
-        _currentId.value = libId
-        writeIndexLocked(libs, libId)
-        // 缓存强制切到这个库重读（refreshCacheLocked 对同 id 直接返回，先清标记）
-        cachedForId = null
-        refreshCacheLocked(libId)
+        // 写的是哪个库，current 都不变——只在写的就是当前库时刷新抽卡缓存
+        writeIndexLocked(libs, _currentId.value)
+        if (_currentId.value == libId) {
+            cachedForId = null
+            refreshCacheLocked(libId)
+        }
         true
     }
 

@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,8 +32,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -53,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -71,8 +74,15 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.data.db.ImageRow
 import com.mie.kreaworkbench.ui.components.CacheManagementSheet
+import com.mie.kreaworkbench.ui.components.GlassAlertDialog
+import com.mie.kreaworkbench.ui.components.GlassDanger
+import com.mie.kreaworkbench.ui.components.ImmersiveGlassFallback
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
+import com.mie.kreaworkbench.ui.components.ImmersiveShadow
 import com.mie.kreaworkbench.ui.components.LargeBarScaffold
 import com.mie.kreaworkbench.ui.components.LocalToaster
+import com.mie.kreaworkbench.ui.components.glassChipColors
 import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
 import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.motion.pressScale
@@ -237,13 +247,20 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
     }
     BackHandler(enabled = selecting) { selected = emptySet() }
     Box(Modifier.fillMaxSize()) {
+        // r27.2：共享背景已提到 AppNav 根，图库不再自己挂一份（那样每次进入都会先空一下再解码）。
+        // 这里只留深色遮罩：把根背景压暗，白字和玻璃顶栏才站得住；没图时底下就是根背景的兜底渐变。
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)))
         LargeBarScaffold(
             title = if (selecting) stringResource(R.string.gallery_selected, selected.size) else stringResource(R.string.title_gallery),
             onBack = { if (selecting) selected = emptySet() else onBack() },
             blur = true,
+            immersive = true,
             actions = {
                 if (!selecting) {
-                    TextButton(onClick = { cache = true }) { Text(stringResource(R.string.cache_title)) }
+                    TextButton(
+                        onClick = { cache = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+                    ) { Text(stringResource(R.string.cache_title)) }
                 }
             },
         ) { padding ->
@@ -258,16 +275,16 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                     ),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    FilterChip(selected = filter == "all", onClick = { filter = "all" }, label = { Text(stringResource(R.string.label_all)) })
-                    FilterChip(selected = filter == "image", onClick = { filter = "image" }, label = { Text(stringResource(R.string.label_images)) })
-                    FilterChip(selected = filter == "video", onClick = { filter = "video" }, label = { Text(stringResource(R.string.label_videos)) })
+                    FilterChip(selected = filter == "all", onClick = { filter = "all" }, label = { Text(stringResource(R.string.label_all)) }, colors = glassChipColors())
+                    FilterChip(selected = filter == "image", onClick = { filter = "image" }, label = { Text(stringResource(R.string.label_images)) }, colors = glassChipColors())
+                    FilterChip(selected = filter == "video", onClick = { filter = "video" }, label = { Text(stringResource(R.string.label_videos)) }, colors = glassChipColors())
                 }
                 AnimatedContent(targetState = filtered.isEmpty(), label = "gallery-body") { empty ->
                     if (empty) {
                         Text(
                             stringResource(R.string.gallery_empty),
                             modifier = Modifier.padding(20.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = ImmersiveInkMuted,
                         )
                     } else {
                         LazyColumn(
@@ -283,9 +300,9 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                                 item(key = "h-$label") {
                                     Text(
                                         label,
-                                        color = MaterialTheme.colorScheme.primary,
+                                        color = ImmersiveInk,
                                         fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.titleSmall,
+                                        style = MaterialTheme.typography.titleSmall.copy(shadow = ImmersiveShadow),
                                         modifier = Modifier.animateItem().padding(vertical = 8.dp),
                                     )
                                 }
@@ -331,15 +348,28 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                 .navigationBarsPadding()
                 .padding(bottom = FloatingToolbarDefaults.ScreenOffset),
         ) {
-            HorizontalFloatingToolbar(expanded = true) {
-                TextButton(onClick = {
-                    vm.save(selected.toList(), { notify(toaster, ctx, it) }) { selected = emptySet() }
-                }) {
-                    Icon(Lucide.Download, null, modifier = Modifier.padding(end = 4.dp))
+            HorizontalFloatingToolbar(
+                expanded = true,
+                // r27：深色玻璃胶囊，白字白图标；浅色主题下也不会出现"浅底白字"
+                colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                    toolbarContainerColor = ImmersiveGlassFallback,
+                    toolbarContentColor = ImmersiveInk,
+                ),
+            ) {
+                TextButton(
+                    onClick = {
+                        vm.save(selected.toList(), { notify(toaster, ctx, it) }) { selected = emptySet() }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+                ) {
+                    Icon(Lucide.Download, null, modifier = Modifier.padding(end = 4.dp), tint = ImmersiveInk)
                     Text(stringResource(R.string.action_save_album))
                 }
-                TextButton(onClick = { confirm = true }) {
-                    Icon(Lucide.Trash2, null, modifier = Modifier.padding(end = 4.dp))
+                TextButton(
+                    onClick = { confirm = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+                ) {
+                    Icon(Lucide.Trash2, null, modifier = Modifier.padding(end = 4.dp), tint = ImmersiveInk)
                     Text(stringResource(R.string.action_delete))
                 }
             }
@@ -350,7 +380,7 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
         // round19b：弹窗不再问「是否同时删除服务器上的文件」。直连 ComfyUI 之后手机端根本没有
         // 删除远端资源的能力（ComfyApi.deleteRemoteImage 一直是个空实现），那个勾选框纯属历史遗留。
         // 现在只做一次确认，并说清这一批要删几个文件。
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text(stringResource(R.string.gallery_delete_title)) },
             text = { Text(stringResource(R.string.gallery_delete_body, selected.size)) },
@@ -360,7 +390,7 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                     vm.delete(selected.toList(), { notify(toaster, ctx, it) }) {
                         selected = emptySet()
                     }
-                }) { Text(stringResource(R.string.action_delete)) }
+                }) { Text(stringResource(R.string.action_delete), color = GlassDanger) }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
@@ -404,7 +434,17 @@ private fun Cell(
             )
         }
         if (selecting) {
-            Checkbox(checked = checked, onCheckedChange = { onClick() }, modifier = Modifier.align(Alignment.TopEnd))
+            Checkbox(
+                checked = checked,
+                onCheckedChange = { onClick() },
+                // 亮图缩略图上也要看得清：白底 + 黑勾
+                colors = CheckboxDefaults.colors(
+                    checkedColor = ImmersiveInk,
+                    checkmarkColor = Color.Black,
+                    uncheckedColor = ImmersiveInk,
+                ),
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
         }
     }
 }

@@ -3,7 +3,7 @@ package com.mie.kreaworkbench.ui.screens.settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.widget.ImageView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,25 +24,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.viewinterop.AndroidView
 import com.mie.kreaworkbench.BuildConfig
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.data.update.UpdateChecker
 import com.mie.kreaworkbench.data.update.UpdateResult
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.notify
 import kotlinx.coroutines.launch
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.components.CardGroup
 import com.mie.kreaworkbench.ui.components.GroupedItem
-import com.mie.kreaworkbench.ui.components.LargeBarScaffold
 
 /**
  * 关于页链接。留空表示尚未发布：行内显示「待发布」，点击不跳转。
@@ -63,11 +62,10 @@ internal fun aboutOpenUrl(raw: String): String? {
 fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val name = stringResource(R.string.app_name)
-    val scheme = MaterialTheme.colorScheme
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     var checking by remember { mutableStateOf(false) }
-    LargeBarScaffold(title = stringResource(R.string.title_about), onBack = onBack) { padding ->
+    SettingsPageScaffold(title = stringResource(R.string.title_about), onBack = onBack) { padding ->
         Column(
             Modifier
                 .padding(padding)
@@ -80,25 +78,19 @@ fun AboutScreen(onBack: () -> Unit) {
                 Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                val icon = remember(context.packageName) {
-                    context.packageManager.getApplicationIcon(context.packageName).mutate()
-                }
-                AndroidView(
-                    modifier = Modifier.size(120.dp).clip(CircleShape),
-                    factory = { ctx ->
-                        ImageView(ctx).apply {
-                            setImageDrawable(icon)
-                            contentDescription = name
-                            scaleType = ImageView.ScaleType.FIT_CENTER
-                        }
-                    },
+                // r29.2：不再用系统 app icon（adaptive icon 的白色 background 会被裁成白圆），
+                // 直接画透明底的紫色 logomark，与启动页同一份资源。
+                Image(
+                    painter = painterResource(R.drawable.ic_splash_logo),
+                    contentDescription = name,
+                    modifier = Modifier.size(120.dp),
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     name,
                     style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = scheme.onSurface,
+                    color = ImmersiveInk,
                 )
             }
             Spacer(Modifier.height(16.dp))
@@ -151,7 +143,7 @@ fun AboutScreen(onBack: () -> Unit) {
             Text(
                 stringResource(R.string.about_gpl_note),
                 style = MaterialTheme.typography.bodySmall,
-                color = scheme.onSurfaceVariant,
+                color = ImmersiveInkMuted,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
             )

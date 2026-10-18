@@ -39,6 +39,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -76,8 +78,18 @@ class GenerationEngine(
     private val compressGates = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private val compressRequested = ConcurrentHashMap.newKeySet<String>()
     private val uploadUiLock = Any()
+    /** 连续几次被 getJob 判成「任务丢失」。没攒够以前不把整单踢出轮询。 */
+    private val lostStreak = ConcurrentHashMap<String, Int>()
+    /** 刚看到过步数的话，短时间里别被一次「排队中」把进度盖掉。 */
+    private val runningStickyUntil = ConcurrentHashMap<String, Long>()
     val snapshot = MutableStateFlow<List<LiveJob>>(emptyList())
     val revision = MutableStateFlow(0L)
+    /**
+     * 最近一次成功落库的图片/视频行 id（r27.1）。
+     * 背景换图动画只认这个事件：UI 只有在「当前背景图正好是这次新结果」时才播滑入，
+     * 不再靠 image key 的变化去猜——否则组件重新挂载（冷启动、进出图库、切场景）都会被误判成换图。
+     */
+    val lastResultId = MutableStateFlow(-1L)
 
     init {
         // 启动兜底清理（round17）：视频暂存大，扫一次 uploads/ 里过期又无任务引用的文件
@@ -120,41 +132,132 @@ class GenerationEngine(
         false
     }
 
+    /** 任何非终态任务（含 paused）：切换 Comfy 地址前用它判断要不要先把旧任务收掉。 */
+    suspend fun hasAnyUnfinished(): Boolean = try {
+        db.needsWork().isNotEmpty()
+    } catch (_: Exception) {
+        false
+    }
+
     fun kick(clientId: String, manual: Boolean = false) {
         if (clientId.isBlank()) return
         if (running[clientId]?.isActive == true) return
         if (manual) manualKicks.add(clientId) else manualKicks.remove(clientId)
         stopFlag.remove(clientId)
-        running[clientId] = scope.launch { runJob(clientId) }
+        running[clientId] = scope.launch {
+            // r31：取消是死路，不能被 reconcile / 来网 / 服务重启再拉起来。
+            // 以前的假死循环就是「取消没写进库 → 冷启动 needsWork 又踢一次 → 任务原地复活」。
+            // 判断放在 IO 线程里做：kick 会被界面直接调用，不在主线程碰库。
+            if (db.job(clientId)?.state == "cancelled") return@launch
+            runJob(clientId)
+        }
     }
 
     /** 用户手动点「继续/重试」：和自动 kick 的区别是提交恢复失败后允许重新 POST /prompt。 */
     fun resumeManual(clientId: String) = kick(clientId, manual = true)
 
+    /**
+     * 用户取消（长按进度条 / 通知上的取消按钮）。r31 重排了顺序：
+     *
+     * 1. 记停止意图，立刻把库和界面落到 cancelled；
+     * 2. 再撕协程：cancel 不等待，join 最多给 [CANCEL_JOIN_MS]，超时照样往下走；
+     * 3. 最后才去撤服务器，撤不掉交给 [retryServerCleanup] 慢慢补。
+     *
+     * 以前是「先 cancelAndJoin 再写库"：端口填错时 OkHttp 要连很久才死，Join 一直堵着，
+     * 用户看到确认框关了、进度条却还写着「生成中」。断网撤销也一样拖满超时，界面全跟着卡。
+     */
     fun cancel(clientId: String) {
+        if (clientId.isBlank()) return
+        stopFlag.add(clientId)
+        manualKicks.remove(clientId)
+        // 先从 running 摘掉：旧协程就算还卡在 connect 上，kick/reconcile 也不会再叠一层
+        val job = running.remove(clientId)
+        job?.cancel()
         scope.launch {
-            stopFlag.add(clientId)
-            // 先停掉提交/轮询协程再撤销：提交阶段 jobId 还没写回，旧写法（先 cancelJob 后 cancel）
-            // 会跳过撤销、且提交协程可能在撤销之后又交一张
-            running[clientId]?.cancelAndJoin()
-            // round17：取消时删暂存视频（失败不删，可能手动重试；参考图沿用原行为不删）
+            // —— 第一步：本地立刻终态（DB + UI/通知都跟 live）——
             try {
-                db.job(clientId)?.requestJson?.let { raw ->
-                    val lv = runCatching { JSONObject(raw).optString("local_video") }.getOrNull()
-                    if (!lv.isNullOrBlank()) File(lv).delete()
-                }
+                db.updateJob(clientId) { it.copy(state = "cancelled", error = "") }
+                put(liveOf(clientId, "cancelled"))
             } catch (_: Exception) {
             }
-            // 先落「已取消」再撤服务器：断网时撤销请求会拖满超时，UI 不能跟着等
-            db.updateJob(clientId) { it.copy(state = "cancelled", error = "") }
-            put(liveOf(clientId, "cancelled"))
+            // round17：取消时删暂存视频（失败不删，可能手动重试；参考图沿用原行为不删）
+            discardLocalVideo(clientId)
+            // —— 第二步：短超时收尾；卡死的协程不再拖着整条取消流程 ——
+            withTimeoutOrNull(CANCEL_JOIN_MS) { job?.join() }
+            // —— 第三步：撤服务器（断网时撤销必然失败；静默丢弃会在服务端留幽灵任务，
+            //     交给定期重试清理：若任务仍为 cancelled 才补撤，避免误删新任务）——
             try {
-                api.cancelJob("cq_$clientId")
+                val done = withTimeoutOrNull(SERVER_CANCEL_TIMEOUT_MS) { api.cancelJob("cq_$clientId") }
+                if (done == null) retryServerCleanup(clientId)
             } catch (_: Exception) {
-                // 断网时撤销必然失败、静默丢弃会在服务端留幽灵任务（恢复网络后原任务照跑）：
-                // 定期重试清理；若任务被重新发起（state 离开 cancelled）就放弃，避免误删新任务
                 retryServerCleanup(clientId)
             }
+            // 到这里本地状态已经稳了（DB 是 cancelled、协程已停）：停止标记可以清掉，别攒内存
+            stopFlag.remove(clientId)
+        }
+    }
+
+    /**
+     * 设置页「强制结束全部任务」（r31）：所有非终态任务——submitting / running / uploading /
+     * upload_fail_ask / paused / queued……——一律落 cancelled 并停掉对应协程，界面立刻空闲。
+     *
+     * 服务器端不保证撤得掉（断网时撤不掉，地址填错时更撤不到）；这里只对有 jobId 的任务
+     * 尽力补撤一次，失败就交给 [retryServerCleanup] 慢慢补。用户要的是本地马上能重新开工，
+     * 而不是继续等一台联系不上的机器。
+     */
+    fun forceCancelAll() {
+        scope.launch {
+            val rows = try {
+                db.needsWork()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val ids = LinkedHashSet<String>()
+            rows.forEach { ids.add(it.clientJobId) }
+            live.values.filter { it.phase !in TERMINAL }.forEach { ids.add(it.clientJobId) }
+            if (ids.isEmpty()) return@launch
+            val remoteIds = ArrayList<String>()
+            for (id in ids) {
+                stopFlag.add(id)
+                manualKicks.remove(id)
+                uploadAskHold.remove(id)
+                compressRequested.remove(id)
+                running.remove(id)?.cancel()
+                var hasJobId = false
+                try {
+                    db.updateJob(id) { row ->
+                        hasJobId = row.jobId.isNotBlank()
+                        row.copy(state = "cancelled", error = "")
+                    }
+                    put(liveOf(id, "cancelled"))
+                } catch (_: Exception) {
+                }
+                discardLocalVideo(id)
+                if (hasJobId) remoteIds.add(id)
+            }
+            // 撤服务器放最后、并发来；每个都失败也不影响本地已经全部取消
+            for (id in remoteIds) {
+                scope.launch {
+                    try {
+                        val done = withTimeoutOrNull(SERVER_CANCEL_TIMEOUT_MS) { api.cancelJob("cq_$id") }
+                        if (done == null) retryServerCleanup(id)
+                    } catch (_: Exception) {
+                        retryServerCleanup(id)
+                    }
+                }
+            }
+            ids.forEach { stopFlag.remove(it) }
+        }
+    }
+
+    /** round17：取消时删暂存视频（失败不删，可能手动重试；参考图沿用原行为不删）。 */
+    private fun discardLocalVideo(clientId: String) {
+        try {
+            db.job(clientId)?.requestJson?.let { raw ->
+                val lv = runCatching { JSONObject(raw).optString("local_video") }.getOrNull()
+                if (!lv.isNullOrBlank()) File(lv).delete()
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -176,12 +279,15 @@ class GenerationEngine(
     fun hasActive(): Boolean = running.values.any { it.isActive }
 
     private suspend fun runJob(clientId: String) {
+        val self = currentCoroutineContext()[Job]
         // 任务 deadline：视频（Wan 81 帧 × 2 采样器）可能远超 30 分钟；到点走 pause（可恢复）而不是 failed。
         // 提交和上传的网络失败重试另计，最多 NETWORK_RETRY_CAP_MS，不跟这个 deadline 一样长。
         val deadline = System.currentTimeMillis() + deadlineMs(clientId)
         holdWake()
         try {
             val row = db.job(clientId) ?: return
+            // 刚被取消又赶上竞态 kick：直接退出，不复活
+            if (row.state == "cancelled") return
             val ready = prepareBody(clientId, row.requestJson, deadline) ?: return
             put(liveOf(clientId, "submitting", prompt = promptOf(db.job(clientId) ?: row)))
             var serverId = db.job(clientId)?.jobId.orEmpty().ifBlank { row.jobId }
@@ -193,7 +299,8 @@ class GenerationEngine(
         } catch (e: Exception) {
             finishLocal(clientId, "failed", e.message ?: appContext.str(R.string.err_generation_failed))
         } finally {
-            running.remove(clientId)
+            // 只摘自己的登记：cancel 后马上又 kick 的新协程，不能被旧协程的 finally 顺手删掉
+            running.remove(clientId, self)
             dropWake()
         }
     }
@@ -214,7 +321,8 @@ class GenerationEngine(
     fun retryDownload(clientId: String) {
         if (clientId.isBlank()) return
         scope.launch {
-            running[clientId]?.cancelAndJoin()
+            // 旧协程可能正卡在 connect 上：join 给个短上限，超时照样重开，别让按钮点了没反应
+            withTimeoutOrNull(CANCEL_JOIN_MS) { running[clientId]?.cancelAndJoin() }
             kick(clientId, manual = true)
         }
     }
@@ -235,10 +343,21 @@ class GenerationEngine(
         }
     }
 
+    /**
+     * 提交（还没拿到 jobId 的阶段）。
+     *
+     * r31 改了两件事：
+     *  - 「根本连不上」（拒连 / 域名解析失败 / 无路由 / 连接超时）**第一次就判失败**：
+     *    端口填错时这类错误会稳定复现，再等 5 分钟也不会好；
+     *  - 其余网络错误给 [SUBMIT_RETRY_CAP_MS] 的短窗口，**用完仍没有 jobId 就 failed，不再 pause**。
+     *
+     * 为什么不能 pause：没有 jobId 就没有「以后把结果取回来」这回事。paused 又会被冷启动的
+     * reconcile 当未完成任务重新踢起来，正是真机上那种「进度条永远在生成中」的假死循环。
+     * 有 jobId 之后的轮询网络失败仍走 [pause]（弱网取回结果靠它，见 [poll]）。
+     */
     private suspend fun submit(body: String, clientId: String, deadline: Long, manual: Boolean): String? {
-        // 网络失败最多重试 NETWORK_RETRY_CAP_MS，且不超过任务 deadline。到点 pause，可恢复，不改 failed。
-        val submitDeadline = minOf(deadline, System.currentTimeMillis() + NETWORK_RETRY_CAP_MS)
-        while (System.currentTimeMillis() < submitDeadline) {
+        val submitDeadline = minOf(deadline, System.currentTimeMillis() + SUBMIT_RETRY_CAP_MS)
+        while (true) {
             if (clientId in stopFlag) return null
             try {
                 // manual=true 表示这次提交是用户手动触发的：ComfyApi 据此允许在恢复失败后重新 POST /prompt
@@ -256,12 +375,21 @@ class GenerationEngine(
                     finishLocal(clientId, "failed", e.message ?: appContext.str(R.string.err_submit_failed))
                     return null
                 }
-                put(liveOf(clientId, "submitting", error = e.message ?: ""))
-                delay(5000)
+                val msg = e.message?.takeIf { it.isNotBlank() } ?: appContext.str(R.string.err_cannot_connect)
+                // 连不上：错地址/错端口/域名解析不了——重试没有意义，立刻给出可读失败
+                if (e.unreachable) {
+                    finishLocal(clientId, "failed", msg)
+                    return null
+                }
+                // 其它网络错误（5xx、响应中途断）：短窗口内再试；窗口用完还是没 jobId 就失败
+                if (System.currentTimeMillis() >= submitDeadline) {
+                    finishLocal(clientId, "failed", msg)
+                    return null
+                }
+                put(liveOf(clientId, "submitting", error = msg))
+                delay(SUBMIT_RETRY_DELAY_MS)
             }
         }
-        pause(clientId)
-        return null
     }
 
     private suspend fun poll(clientId: String, serverId: String, deadline: Long) {
@@ -270,16 +398,44 @@ class GenerationEngine(
             holdWake()
             try {
                 val job = api.getJob(serverId)
+                if (holdFalseLost(clientId, job)) {
+                    delay(1500)
+                    continue
+                }
                 if (!saveResults(clientId, job)) {
                     delay(5000)
                     continue
                 }
+                // r31：下载/写库期间用户可能已经取消，迟到的状态写回不能盖掉 cancelled
+                if (clientId in stopFlag) return
                 val phase = if (job.state in setOf("success", "partial", "failed", "cancelled")) job.state else job.state
+                val nowMs = System.currentTimeMillis()
+                val prevLive = live[clientId]
+                if (phase == "running" && (job.progressMax > 0 || job.progressValue > 0)) {
+                    runningStickyUntil[clientId] = nowMs + PROGRESS_STICKY_MS
+                } else if (phase in setOf("success", "partial", "failed", "cancelled")) {
+                    runningStickyUntil.remove(clientId)
+                }
+                val stickyUntil = runningStickyUntil[clientId] ?: 0L
+                val keepRunning = phase == "queued" && nowMs < stickyUntil && prevLive?.phase == "running"
                 db.updateJob(clientId) {
                     it.copy(state = job.state, done = job.done, total = job.total, error = job.error.orEmpty(), jobId = serverId)
                 }
-                put(fromRemote(clientId, job, phase))
+                val shown = fromRemote(clientId, job, if (keepRunning) "running" else phase)
+                put(
+                    if (keepRunning) {
+                        shown.copy(
+                            step = if (job.progressValue > 0) job.progressValue else prevLive.step,
+                            stepMax = if (job.progressMax > 0) job.progressMax else prevLive.stepMax,
+                            error = "",
+                        )
+                    } else {
+                        shown
+                    },
+                )
                 if (job.state in setOf("success", "partial", "failed", "cancelled")) {
+                    lostStreak.remove(clientId)
+                    runningStickyUntil.remove(clientId)
                     rememberSeeds(job)
                     emitDone(clientId, job.state, job.error)
                     return
@@ -294,6 +450,34 @@ class GenerationEngine(
             }
         }
         pause(clientId)
+    }
+    /**
+     * 假丢失不要整单退出轮询。getJob 已经有宽限；这里再要求连续几次都报丢失，
+     * 才真正写成失败。宽限内界面保持原先的步数，不被「任务丢失」盖掉。
+     * @return true = 这次先按进行中/排队留着，调用方继续 poll。
+     */
+    private fun holdFalseLost(clientId: String, job: RemoteJob): Boolean {
+        val lost = job.state == "failed" && job.error == appContext.str(R.string.err_job_lost)
+        if (!lost) {
+            lostStreak.remove(clientId)
+            return false
+        }
+        val n = lostStreak.merge(clientId, 1, Int::plus) ?: 1
+        if (n >= LOST_CONFIRM_POLLS) return false
+        val prev = live[clientId]
+        val keep = if ((prev?.stepMax ?: 0) > 0 || job.progressMax > 0 || prev?.phase == "running") {
+            "running"
+        } else {
+            "queued"
+        }
+        put(
+            fromRemote(clientId, job, keep).copy(
+                error = "",
+                step = if (job.progressValue > 0) job.progressValue else prev?.step ?: 0,
+                stepMax = if (job.progressMax > 0) job.progressMax else prev?.stepMax ?: 0,
+            ),
+        )
+        return true
     }
 
     /** 图片/视频下载 + 文本落库；false = 有产物没拿到（轮询稍后自动重试），任务不算失败。 */
@@ -404,7 +588,7 @@ class GenerationEngine(
                 albumUri = "",
                 kind = "video",
             )
-            db.insertImage(videoRow)
+            lastResultId.value = db.insertImage(videoRow)
             cache.enforce()
             revision.update { it + 1 }
         }
@@ -508,7 +692,7 @@ class GenerationEngine(
                 savedToAlbum = false,
                 albumUri = "",
             )
-            db.insertImage(imgRow)
+            lastResultId.value = db.insertImage(imgRow)
             cache.enforce()
             revision.update { it + 1 }
         }
@@ -611,7 +795,13 @@ class GenerationEngine(
                         finishLocal(clientId, "failed", e.message ?: appContext.str(R.string.err_upload_failed))
                         return null
                     }
-                    put(liveOf(clientId, "uploading", error = e.message ?: ""))
+                    val msg = e.message?.takeIf { it.isNotBlank() } ?: appContext.str(R.string.err_cannot_connect)
+                    // r31：连不上就别再等 5 分钟——错端口时这个循环会把任务拖成「永远在上传」
+                    if (e.unreachable) {
+                        finishLocal(clientId, "failed", msg)
+                        return null
+                    }
+                    put(liveOf(clientId, "uploading", error = msg))
                     delay(5000)
                 } catch (_: Exception) {
                     delay(5000)
@@ -666,6 +856,15 @@ class GenerationEngine(
                 } catch (e: ApiException) {
                     if (!e.network) {
                         finishLocal(clientId, "failed", e.message ?: appContext.str(R.string.err_upload_failed))
+                        return null
+                    }
+                    // r31：同上，连不上直接失败，别把任务挂在「上传中」直到 deadline
+                    if (e.unreachable) {
+                        finishLocal(
+                            clientId,
+                            "failed",
+                            e.message?.takeIf { it.isNotBlank() } ?: appContext.str(R.string.err_cannot_connect),
+                        )
                         return null
                     }
                     delay(5000)
@@ -885,6 +1084,9 @@ class GenerationEngine(
     }
 
     private fun pause(clientId: String) {
+        // r31：取消后不能被迟到的 pause 翻回去（poll/上传重试的收尾都会走到这里）
+        if (clientId in stopFlag) return
+        if (db.job(clientId)?.state == "cancelled") return
         val msg = appContext.str(R.string.paused_net)
         db.updateJob(clientId) { it.copy(state = "paused", error = msg) }
         put(liveOf(clientId, "paused", error = msg))
@@ -928,6 +1130,12 @@ class GenerationEngine(
     }
 
     private fun finishLocal(clientId: String, state: String, error: String) {
+        // r31：已被用户取消的任务，迟到的失败/成功回调不能再把它改回非终态。
+        // 除了停止标记，还看库里的最终状态——批量取消后标记会很快清掉，库才是唯一真相。
+        if (state != "cancelled") {
+            if (clientId in stopFlag) return
+            if (db.job(clientId)?.state == "cancelled") return
+        }
         db.updateJob(clientId) { it.copy(state = state, error = error) }
         put(liveOf(clientId, state, error = error))
         emitDone(clientId, state, error)
@@ -1009,8 +1217,29 @@ class GenerationEngine(
     }
 }
 
-/** 提交、上传参考图的网络失败自动重试上限。排队和生成中的轮询不走这条，仍用任务 deadline。 */
+/** 上传参考图/视频的网络失败自动重试上限。排队和生成中的轮询不走这条，仍用任务 deadline。 */
 private const val NETWORK_RETRY_CAP_MS = 5 * 60 * 1000L
+
+/**
+ * 提交（还没拿到 jobId）阶段的重试窗口（r31）：比上传短得多。
+ * 5 分钟的旧值会在错端口时让界面一直「生成中」，而这期间用户什么也做不了。
+ */
+private const val SUBMIT_RETRY_CAP_MS = 45_000L
+
+/** 提交阶段两次重试的间隔。 */
+private const val SUBMIT_RETRY_DELAY_MS = 5_000L
+
+/** 取消时等旧协程收尾的上限（r31）。卡在 connect 上的协程最多等这么久，之后照样落终态、撤服务器。 */
+private const val CANCEL_JOIN_MS = 3_000L
+
+/** 撤销服务端任务的上限（r31）：连不上时不能让它把取消流程一直挂着。 */
+private const val SERVER_CANCEL_TIMEOUT_MS = 8_000L
+
+/** 连续这么多次 getJob 都说「任务丢失」，才允许整单失败退出轮询。 */
+private const val LOST_CONFIRM_POLLS = 3
+
+/** 已经看见步数之后，这段时间内一次「排队中」不把进度条盖掉。 */
+private const val PROGRESS_STICKY_MS = 8_000L
 
 /** 图片产物允许的扩展名（按 ComfyUI 返回的 filename 判断）；不在此列的走 Content-Type。 */
 private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")

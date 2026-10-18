@@ -75,8 +75,35 @@ suspend fun SettingsStore.baseUrl(): String {
 
 private val BACKOFF = longArrayOf(0L, 1000L, 3000L, 6000L)
 
-fun friendlyIo(): ApiException =
-    ApiException(KreaApp.instance.str(R.string.err_cannot_connect), network = true)
+fun friendlyIo(cause: Throwable? = null): ApiException =
+    ApiException(
+        KreaApp.instance.str(R.string.err_cannot_connect),
+        network = true,
+        unreachable = isUnreachable(cause),
+    )
+
+/**
+ * 连接压根没建立（round31）：拒连、域名解析失败、无路由、连接阶段超时。
+ * 这类失败和「网络抖一下」不同——地址/端口填错时它会稳定复现，重试窗口再长也等不出结果。
+ * OkHttp 把这几种都包成 IOException 抛出（callTimeout 则是 InterruptedIOException），这里顺着 cause 链认。
+ */
+private fun isUnreachable(cause: Throwable?): Boolean {
+    var c = cause
+    var depth = 0
+    while (c != null && depth < 8) {
+        when (c) {
+            is java.net.ConnectException,
+            is java.net.UnknownHostException,
+            is java.net.NoRouteToHostException,
+            is java.net.SocketTimeoutException,
+            is java.io.InterruptedIOException,
+            -> return true
+        }
+        c = c.cause
+        depth++
+    }
+    return false
+}
 
 suspend fun OkHttpClient.callJson(
     build: () -> Request,
@@ -97,16 +124,18 @@ suspend fun OkHttpClient.callJson(
             throw e
         } catch (e: IOException) {
             last = e
-            if (!idempotent || i == attempts - 1) throw friendlyIo()
+            if (!idempotent || i == attempts - 1) throw friendlyIo(e)
         }
     }
-    throw (last as? ApiException) ?: friendlyIo()
+    throw (last as? ApiException) ?: friendlyIo(last as? Throwable)
 }
 
 /**
  * enqueue + 可取消挂起：协程被取消（用户取消任务/服务停止）时立刻 cancel 底层请求。
  * 不能用阻塞 execute()——它不响应协程取消，断网时取消会留下后台跑完的请求，恢复网络后幽灵入队。
  */
+internal suspend fun OkHttpClient.callBodyText(build: () -> Request): Pair<Int, String> = awaitText(build)
+
 private suspend fun OkHttpClient.awaitText(build: () -> Request): Pair<Int, String> =
     suspendCancellableCoroutine { cont ->
         val call = newCall(build())

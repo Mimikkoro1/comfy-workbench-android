@@ -20,14 +20,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,9 +61,15 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.library.FMT_TXT
 import com.mie.kreaworkbench.data.library.ImportResult
 import com.mie.kreaworkbench.data.library.LibraryMeta
-import com.mie.kreaworkbench.ui.components.KreaCard
+import com.mie.kreaworkbench.ui.components.GlassAlertDialog
+import com.mie.kreaworkbench.ui.components.GlassBottomSheet
+import com.mie.kreaworkbench.ui.components.GlassCard
+import com.mie.kreaworkbench.ui.components.GlassDanger
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.ScreenHeader
+import com.mie.kreaworkbench.ui.components.glassTextFieldColors
 import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.locale.known
@@ -107,7 +112,6 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     var catList by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     val scope = rememberCoroutineScope()
     var showExample by remember { mutableStateOf(false) }
-    val scheme = MaterialTheme.colorScheme
 
     // 库导出（round8 2.1）：CreateDocument 与导入的 OpenDocument 对称；mime 按库 fmt 定死在契约上，
     // 所以 txt / json 各一个 launcher。建议文件名 = safeExportName(库名) + 对应扩展名。
@@ -148,54 +152,56 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     LaunchedEffect(libs) { vm.refreshEditable() }
     val editableIds = vm.editableIds
 
+    // r28：压在共享背景上，标题和卡片内文字都走白字体系（玻璃卡由 GlassCard 提供）。
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(stringResource(R.string.tab_library))
+        ScreenHeader(stringResource(R.string.tab_library), ink = ImmersiveInk)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
-            KreaCard {
+            GlassCard(padding = 12.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         stringResource(R.string.section_workflows),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = scheme.onSurface,
+                        fontSize = 13.sp,
+                        color = ImmersiveInk,
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(
                         onClick = { pickWorkflow.launch(arrayOf("application/json", "*/*")) },
                         enabled = !vm.wfImporting,
+                        colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
                     ) { Text(stringResource(R.string.import_workflow), fontSize = 12.sp) }
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 imported.forEach { wf ->
                     val isCur = s.currentWorkflow == wf.id
                     // round13 第 2 项：改单行紧凑列表——去掉「导入于」次要行、压行距，
                     // 一屏能看 8 个以上；「当前」徽标 + 加粗即选中态，不再用整宽 RadioButton
                     // r13fix 第 3 项：去掉行内三个图标按钮，行高压到 ~44dp；点 = 设为当前，长按 = 操作弹层
+                    // r21：行高再压到 ~40dp、行内纵向 padding 2dp，观感更紧
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 44.dp)
+                            .heightIn(min = 40.dp)
                             .combinedClickable(
                                 onClick = { vm.setWorkflow(wf.id) },
                                 onLongClick = { wfMenu = wf.id to wf.displayName },
                             )
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (isCur) {
                             Box(
                                 Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(scheme.primary.copy(alpha = 0.15f))
+                                    .background(Color.White.copy(alpha = 0.22f))
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             ) {
-                                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = scheme.primary, fontWeight = FontWeight.Bold)
+                                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.size(6.dp))
                         }
                         Text(
                             knownText(wf.displayName),
-                            color = scheme.onSurface,
+                            color = ImmersiveInk,
                             fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -208,48 +214,49 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                         if (vm.wfImporting) stringResource(R.string.state_importing_long) else
                             stringResource(R.string.workflows_empty),
                         fontSize = 11.sp,
-                        color = scheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        stringResource(R.string.list_item_hint),
-                        fontSize = 11.sp,
-                        color = scheme.onSurfaceVariant,
+                        color = ImmersiveInkMuted,
                     )
                 }
                 if (vm.wfImporting) {
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = ImmersiveInk)
                         Spacer(Modifier.size(8.dp))
-                        Text(stringResource(R.string.state_importing), color = scheme.onSurfaceVariant, fontSize = 12.sp)
+                        Text(stringResource(R.string.state_importing), color = ImmersiveInkMuted, fontSize = 12.sp)
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            KreaCard {
+            if (!s.advGacha) {
+            Spacer(Modifier.height(8.dp))
+            GlassCard(padding = 12.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         stringResource(R.string.section_prompts),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = scheme.onSurface,
+                        fontSize = 13.sp,
+                        color = ImmersiveInk,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = { showExample = true }) { Text(stringResource(R.string.example_format), fontSize = 12.sp) }
-                    TextButton(onClick = { pick.launch(arrayOf("*/*")) }, enabled = !vm.importing) { Text(stringResource(R.string.action_import), fontSize = 12.sp) }
+                    TextButton(
+                        onClick = { showExample = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+                    ) { Text(stringResource(R.string.example_format), fontSize = 12.sp) }
+                    TextButton(
+                        onClick = { pick.launch(arrayOf("*/*")) },
+                        enabled = !vm.importing,
+                        colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+                    ) { Text(stringResource(R.string.action_import), fontSize = 12.sp) }
                 }
                 if (vm.importing) {
                     Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = ImmersiveInk)
                         Spacer(Modifier.size(8.dp))
-                        Text(stringResource(R.string.state_importing), color = scheme.onSurfaceVariant, fontSize = 12.sp)
+                        Text(stringResource(R.string.state_importing), color = ImmersiveInkMuted, fontSize = 12.sp)
                     }
                 }
                 if (libs.isEmpty()) {
                     Text(
                         if (vm.importing) stringResource(R.string.state_importing_long) else stringResource(R.string.prompts_empty),
-                        color = scheme.onSurfaceVariant,
+                        color = ImmersiveInkMuted,
                         fontSize = 13.sp,
                     )
                 }
@@ -257,14 +264,15 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                     val isCur = lib.id == currentId
                     Row(
                         // 点击 = 设为当前库；长按 = 操作弹层（编辑 / 重命名库 / 重命名分组 / 导出 / 删除）
+                        // r21：行高 44 → 40、行内纵向 padding 4 → 2，列表更紧
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 44.dp)
+                            .heightIn(min = 40.dp)
                             .combinedClickable(
                                 onClick = { vm.setCurrent(lib.id) },
                                 onLongClick = { libMenu = lib },
                             )
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -273,16 +281,16 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                                     Box(
                                         Modifier
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(scheme.primary.copy(alpha = 0.15f))
+                                            .background(Color.White.copy(alpha = 0.22f))
                                             .padding(horizontal = 6.dp, vertical = 2.dp),
                                     ) {
-                                        Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = scheme.primary, fontWeight = FontWeight.Bold)
+                                        Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
                                     }
                                     Spacer(Modifier.size(6.dp))
                                 }
                                 Text(
                                     knownText(lib.name),
-                                    color = scheme.onSurface,
+                                    color = ImmersiveInk,
                                     fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -292,26 +300,20 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                                 pluralStringResource(R.plurals.entry_count, lib.count, lib.count),
                                 fontSize = 11.sp,
                                 lineHeight = 14.sp,
-                                color = scheme.onSurfaceVariant,
+                                color = ImmersiveInkMuted,
                                 maxLines = 1,
                             )
                         }
                     }
                 }
-                if (libs.isNotEmpty()) {
-                    Text(
-                        stringResource(R.string.list_item_hint),
-                        fontSize = 11.sp,
-                        color = scheme.onSurfaceVariant,
-                    )
-                }
             }
-            Spacer(Modifier.height(24.dp + LocalExtraBottom.current))
+            }
+            Spacer(Modifier.height(16.dp + LocalExtraBottom.current))
         }
     }
 
     confirmDeleteLib?.let { lib ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirmDeleteLib = null },
             title = { Text(stringResource(R.string.delete_library_title)) },
             text = {
@@ -324,8 +326,11 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                 )
             },
             confirmButton = {
-                TextButton(onClick = { vm.delete(lib.id); confirmDeleteLib = null }) {
-                    Text(stringResource(R.string.action_delete), color = scheme.error)
+                TextButton(
+                    onClick = { vm.delete(lib.id); confirmDeleteLib = null },
+                    colors = ButtonDefaults.textButtonColors(contentColor = GlassDanger),
+                ) {
+                    Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
@@ -335,13 +340,16 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     confirmDeleteWf?.let { (id, name) ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirmDeleteWf = null },
             title = { Text(stringResource(R.string.delete_workflow_title)) },
             text = { Text(stringResource(R.string.delete_workflow_body, knownText(name))) },
             confirmButton = {
-                TextButton(onClick = { vm.deleteWorkflow(id); confirmDeleteWf = null }) {
-                    Text(stringResource(R.string.action_delete), color = scheme.error)
+                TextButton(
+                    onClick = { vm.deleteWorkflow(id); confirmDeleteWf = null },
+                    colors = ButtonDefaults.textButtonColors(contentColor = GlassDanger),
+                ) {
+                    Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
@@ -352,7 +360,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
 
     renameWf?.let { (id, name) ->
         var text by remember(id) { mutableStateOf(name) }
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { renameWf = null },
             title = { Text(stringResource(R.string.rename_workflow)) },
             text = {
@@ -361,6 +369,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                     onValueChange = { text = it },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = glassTextFieldColors(),
                 )
             },
             confirmButton = {
@@ -418,7 +427,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
         val trimmed = text.trim()
         // 重名校验：与其他库同名不允许（同库改名回原名字然 OK）
         val dup = libs.any { it.id != lib.id && it.name == trimmed }
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { renameLib = null },
             title = { Text(stringResource(R.string.rename_library)) },
             text = {
@@ -429,10 +438,11 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                         singleLine = true,
                         isError = trimmed.isBlank() || dup,
                         modifier = Modifier.fillMaxWidth(),
+                        colors = glassTextFieldColors(),
                     )
                     if (dup) {
                         Spacer(Modifier.height(4.dp))
-                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = scheme.error)
+                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = GlassDanger)
                     }
                 }
             },
@@ -452,13 +462,14 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     renameCat?.let { lib ->
-        AlertDialog(
+        // 只列分组让用户挑一个，不显示输入框：GlassAlertDialog 的 confirmButton 必须传，给空 lambda。
+        GlassAlertDialog(
             onDismissRequest = { renameCat = null },
             title = { Text(stringResource(R.string.pick_category_rename)) },
             text = {
                 Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
                     if (catList.isEmpty()) {
-                        Text(stringResource(R.string.prompts_empty), fontSize = 13.sp, color = scheme.onSurfaceVariant)
+                        Text(stringResource(R.string.prompts_empty), fontSize = 13.sp, color = ImmersiveInkMuted)
                     }
                     catList.forEach { (name, count) ->
                         TextButton(onClick = {
@@ -468,7 +479,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                         }) {
                             Text(
                                 stringResource(R.string.category_count, knownText(name), count),
-                                color = scheme.onSurface,
+                                color = ImmersiveInk,
                             )
                         }
                     }
@@ -486,12 +497,12 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
         val trimmed = text.trim()
         // 与该库其他既有分组同名 = 合并，先拦下并提示（重命名分组不是合并入口）
         val dup = catList.any { it.first == trimmed && it.first != renameCatOld }
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { renameCatInput = null },
             title = { Text(stringResource(R.string.rename_category)) },
             text = {
                 Column {
-                    Text(stringResource(R.string.draw_cat, knownText(renameCatOld)), fontSize = 13.sp, color = scheme.onSurfaceVariant)
+                    Text(stringResource(R.string.draw_cat, knownText(renameCatOld)), fontSize = 13.sp, color = ImmersiveInkMuted)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = text,
@@ -499,10 +510,11 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                         singleLine = true,
                         isError = trimmed.isBlank() || dup,
                         modifier = Modifier.fillMaxWidth(),
+                        colors = glassTextFieldColors(),
                     )
                     if (dup) {
                         Spacer(Modifier.height(4.dp))
-                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = scheme.error)
+                        Text(stringResource(R.string.dup_name), fontSize = 12.sp, color = GlassDanger)
                     }
                 }
             },
@@ -522,7 +534,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     vm.nameMismatch?.let { ask ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { vm.answerNameMismatch(false) },
             title = { Text(stringResource(R.string.name_mismatch)) },
             text = { Text(stringResource(R.string.name_mismatch_body, ask.expected, ask.actual, knownText(ask.displayName))) },
@@ -536,7 +548,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     vm.wfOutcome?.let { r ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { vm.dismissWfOutcome() },
             title = { Text(r.title) },
             text = {
@@ -551,7 +563,7 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     vm.result?.let { r ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { vm.dismissResult() },
             title = { Text(if (r.ok) stringResource(R.string.import_done) else stringResource(R.string.import_failed)) },
             text = {
@@ -563,9 +575,9 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                     }
                     if (r.reasons.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
-                        Text(stringResource(R.string.skip_reasons), fontWeight = FontWeight.SemiBold, color = scheme.onSurface)
+                        Text(stringResource(R.string.skip_reasons), fontWeight = FontWeight.SemiBold, color = ImmersiveInk)
                         r.reasons.forEach { reason ->
-                            Text("· $reason", fontSize = 12.sp, color = scheme.onSurfaceVariant)
+                            Text("· $reason", fontSize = 12.sp, color = ImmersiveInkMuted)
                         }
                     }
                 }
@@ -577,12 +589,12 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     }
 
     if (showExample) {
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { showExample = false },
             title = { Text(stringResource(R.string.example_title)) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(stringResource(R.string.example_text), fontSize = 12.sp, color = scheme.onSurfaceVariant)
+                    Text(stringResource(R.string.example_text), fontSize = 12.sp, color = ImmersiveInkMuted)
                 }
             },
             confirmButton = {
@@ -599,25 +611,24 @@ private class RowAction(
     val onClick: () -> Unit,
 )
 
-/** 列表行长按后的操作弹层：标题 + 一列动作（危险动作用 error 色）；点动作先关弹层再执行。 */
+/** 列表行长按后的操作弹层：标题 + 一列动作（危险操作用浅红）；点动作先关弹层再执行。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RowActionSheet(title: String, onDismiss: () -> Unit, actions: List<RowAction>) {
-    val scheme = MaterialTheme.colorScheme
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassBottomSheet(onDismissRequest = onDismiss) {
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
-            color = scheme.onSurface,
+            color = ImmersiveInk,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
         )
         Column(Modifier.navigationBarsPadding().padding(bottom = 8.dp)) {
             actions.forEach { a ->
-                val tint = if (a.danger) scheme.error else scheme.onSurfaceVariant
+                val tint = if (a.danger) GlassDanger else ImmersiveInkMuted
                 ListItem(
-                    headlineContent = { Text(a.label, color = if (a.danger) scheme.error else scheme.onSurface) },
+                    headlineContent = { Text(a.label, color = if (a.danger) GlassDanger else ImmersiveInk) },
                     leadingContent = { Icon(a.icon, contentDescription = null, tint = tint) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.clickable {

@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.data
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -24,7 +25,7 @@ fun buildCustomBody(
     .put("client_job_id", clientId)
     .put("mode", "custom")
     .put("workflow_id", workflowId)
-    .put("prompt", prompt.take(4000))
+    .put("prompt", prompt.take(12000))
     .put("batch_count", batch.coerceIn(1, 8))
     .put("seed", seed)
     .put("seed_random", seedRandom)
@@ -36,3 +37,54 @@ fun buildCustomBody(
     // LoRA 开关 / 强度（round16）：服务端不读，只有 buildCustomWorkflows 用；老 body 无这些键 → 不变
     .apply { if (loraStates != null && loraStates.length() > 0) put("kwb_lora", loraStates) }
     .apply { if (loraStrengths != null && loraStrengths.length() > 0) put("kwb_lora_strength", loraStrengths) }
+
+private val SIZE_TOKEN = Regex("""\d+[xX×]\d+""")
+
+/**
+ * 看图页「重新生成」：沿用这张图记下的提交体，只换新任务号、强制随机种子、只出 1 张。
+ * 有宽高时，把尺寸数组收成这一张的尺寸，避免把当时的整批尺寸再跑一遍。
+ * 没有 workflow_id 或正文不是 JSON 时返回 null。
+ */
+fun regenerateBody(
+    paramsJson: String,
+    prompt: String,
+    width: Int,
+    height: Int,
+    newClientId: String,
+): JSONObject? {
+    val body = try {
+        JSONObject(paramsJson)
+    } catch (_: Exception) {
+        return null
+    }
+    if (body.optString("workflow_id").isBlank()) return null
+    body.put("client_job_id", newClientId)
+    if (body.optString("mode").isBlank()) body.put("mode", "custom")
+    body.put("seed_random", true)
+    body.put("batch_count", 1)
+    val text = prompt.trim()
+    if (text.isNotBlank()) body.put("prompt", text.take(12000))
+    val values = body.optJSONObject("values")
+    if (values != null && width > 0 && height > 0) {
+        val size = "${width}x${height}"
+        val names = ArrayList<String>()
+        val keys = values.keys()
+        while (keys.hasNext()) names.add(keys.next())
+        for (key in names) {
+            val arr = values.optJSONArray(key) ?: continue
+            if (arr.length() == 0) continue
+            var sizes = true
+            for (i in 0 until arr.length()) {
+                if (!SIZE_TOKEN.matches(arr.optString(i))) {
+                    sizes = false
+                    break
+                }
+            }
+            if (sizes) values.put(key, JSONArray().put(size))
+        }
+    }
+    body.remove("comfy_prompts")
+    body.remove("submit_attempted")
+    body.remove("manual_retry")
+    return body
+}

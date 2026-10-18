@@ -60,10 +60,10 @@ class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
                 last = e
             } catch (e: IOException) {
                 last = e
-                if (i == 3) throw friendlyIo()
+                if (i == 3) throw friendlyIo(e)
             }
         }
-        throw (last as? ApiException) ?: friendlyIo()
+        throw (last as? ApiException) ?: friendlyIo(last as? Throwable)
     }
 
     /**
@@ -146,10 +146,10 @@ class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
                 last = e
             } catch (e: IOException) {
                 last = e
-                if (i == 3) throw friendlyIo()
+                if (i == 3) throw friendlyIo(e)
             }
         }
-        throw (last as? ApiException) ?: friendlyIo()
+        throw (last as? ApiException) ?: friendlyIo(last as? Throwable)
     }
 
     private suspend fun downloadOnce(url: String, dest: File, onProgress: (ByteProgress) -> Unit): String? {

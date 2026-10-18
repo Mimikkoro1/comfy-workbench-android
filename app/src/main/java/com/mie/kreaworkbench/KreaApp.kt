@@ -11,6 +11,7 @@ import com.mie.kreaworkbench.data.api.RequestAuth
 import com.mie.kreaworkbench.data.api.Transfer
 import com.mie.kreaworkbench.data.api.fileClient
 import com.mie.kreaworkbench.data.comfy.ComfyApi
+import com.mie.kreaworkbench.data.gacha.AdvGachaClient
 import com.mie.kreaworkbench.data.db.GalleryDb
 import com.mie.kreaworkbench.data.library.PromptLibraryRepo
 import com.mie.kreaworkbench.data.settings.SettingsStore
@@ -100,6 +101,7 @@ class AppContainer(context: Context) {
     // auth 先建：api/transfer/progress 的 OkHttp 客户端都要挂它的 Basic Auth 拦截器
     val auth = RequestAuth(settings)
     val api = ComfyApi(app, settings, db, auth.interceptor)
+    val gacha = AdvGachaClient(app)
     val library = PromptLibraryRepo(app)
     val workflowStore = WorkflowStore(app)
     val transfer = Transfer(settings, auth.interceptor)

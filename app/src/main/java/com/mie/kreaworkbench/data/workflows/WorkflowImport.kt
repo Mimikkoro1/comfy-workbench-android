@@ -58,6 +58,9 @@ object Specs {
     fun type(o: JSONObject): String = o.optString("type", "text")
     fun label(o: JSONObject): String = o.optString("label").ifBlank { field(o) }
     fun tier(o: JSONObject): String = o.optString("tier", "basic")
+
+    /** 模型类 spec 的展示优先级。定义里经常没有 class_type，所以同时看字段名和标签。 */
+    fun modelTier(o: JSONObject): Int = modelDisplayOrder(o)
     fun help(o: JSONObject): String = o.optString("help")
     fun exampleKey(o: JSONObject): String = o.optString("example_key")
     fun maxChars(o: JSONObject): Int = o.optInt("max_chars", 2000)
@@ -174,6 +177,47 @@ object Specs {
 
 /** class_type 去掉「|」及其后面的部分（ShowAnything|Mie → ShowAnything）。 */
 fun baseClass(classType: String): String = classType.substringBefore('|').trim()
+
+/**
+ * 模型和采样页的固定顺序：扩散模型 0、文本编码器 1、VAE 2、LoRA 3，其余 4。
+ * class_type 优先（spec 上有，或从工作流节点补）；没有就看字段名和标签。
+ * 视觉编码器不算文本编码器。
+ */
+fun modelDisplayOrder(spec: JSONObject, workflow: JSONObject? = null): Int {
+    val fromNode = workflow?.optJSONObject(Specs.nodeId(spec))?.optString("class_type").orEmpty()
+    val cls = baseClass(spec.optString("class_type").ifBlank { fromNode }).lowercase()
+    val field = Specs.field(spec).lowercase()
+    val label = Specs.label(spec).lowercase()
+    val vision = "vision" in cls || "clip_vision" in field || "视觉" in label
+    if (vision) return 4
+    val diffusion = cls in DIFFUSION_CLASSES ||
+        field in setOf("unet_name", "ckpt_name") ||
+        "扩散" in label || "diffusion" in label
+    if (diffusion) return 0
+    val text = cls in TEXT_ENCODER_CLASSES ||
+        field == "clip_name" || field.startsWith("clip_name") ||
+        "文本编码" in label || "text encoder" in label
+    if (text) return 1
+    val vae = cls == "vaeloader" || field == "vae_name" || label == "vae" || label.endsWith(" vae")
+    if (vae) return 2
+    val lora = "lora" in cls || field == "lora_name" || field == "lora" || "lora" in label
+    if (lora) return 3
+    return 4
+}
+
+private val DIFFUSION_CLASSES = setOf(
+    "unetloader",
+    "unetloadergguf",
+    "checkpointloadersimple",
+    "checkpointloader",
+)
+
+private val TEXT_ENCODER_CLASSES = setOf(
+    "cliploader",
+    "cliploadergguf",
+    "dualcliploader",
+    "triplecliploader",
+)
 
 private val TEXT_OUTPUT_CLASSES = setOf("ShowAnything", "ShowText", "PreviewAny", "ShowString")
 private val VIDEO_OUTPUT_CLASSES = setOf("VHS_VideoCombine", "SaveVideo", "SaveWEBM")

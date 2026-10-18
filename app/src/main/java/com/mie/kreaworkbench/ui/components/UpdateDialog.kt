@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -22,14 +21,15 @@ import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.update.UpdateChecker
 
-/** 新版本对话框（round14）：标题 + 可滚动更新说明 + 去下载 / 忽略此版本 / 稍后。 */
+/** 新版本对话框（round14）：标题 + 可滚动更新说明 + 去下载 / 忽略此版本 / 稍后。
+ *  r29：换成玻璃弹层；挂在 AppNav 的 GlassHostProvider 里（不要再放回 MainActivity 顶层）。 */
 @Composable
 fun UpdateDialog() {
     val info by UpdateChecker.pending.collectAsState()
     val rel = info ?: return
     val context = LocalContext.current
     val dismiss = { UpdateChecker.pending.value = null }
-    AlertDialog(
+    GlassAlertDialog(
         onDismissRequest = dismiss,
         title = { Text(stringResource(R.string.update_title, rel.version)) },
         text = {

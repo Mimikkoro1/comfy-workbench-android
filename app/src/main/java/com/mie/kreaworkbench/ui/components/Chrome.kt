@@ -104,14 +104,14 @@ fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun ScreenHeader(title: String, actions: @Composable () -> Unit = {}) {
+fun ScreenHeader(title: String, actions: @Composable () -> Unit = {}, ink: Color? = null) {
     Row(
         Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             title,
-            color = MaterialTheme.colorScheme.primary,
+            color = ink ?: MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.headlineMediumEmphasized,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -131,11 +131,9 @@ fun HeaderIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
 
 @Composable
 fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
     val shape = MaterialTheme.shapes.extraLarge
     val haptic = LocalHapticFeedback.current
-    val fallback = colors.surfaceContainerLow.copy(alpha = 0.92f)
-    // M3 NavigationBar 式的胶囊指示器：按下波纹裁进胶囊形，选中项带柔和的胶囊底色。
+    // 固定暗底白字，不跟主题色，浅色图和深色图都看得清。
     val itemShape = RoundedCornerShape(50)
     Box(
         modifier
@@ -148,8 +146,8 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                 .fillMaxWidth()
                 .height(64.dp)
                 .clip(shape)
-                .glass(fallback)
-                .border(1.dp, cardBorder(), shape),
+                .immersiveGlass(28.dp)
+                .border(1.dp, ImmersiveHairline, shape),
         )
         Row(
             Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 6.dp, vertical = 7.dp),
@@ -157,10 +155,10 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
         ) {
             AppTab.entries.forEach { item ->
                 val selected = tab == item
-                val tint = if (selected) colors.primary else colors.onSurface.copy(alpha = 0.38f)
+                val ink = if (selected) ImmersiveInk else ImmersiveInkMuted
                 val press = remember { MutableInteractionSource() }
                 val pill by animateColorAsState(
-                    targetValue = if (selected) colors.primary.copy(alpha = 0.14f) else Color.Transparent,
+                    targetValue = if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent,
                     animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Color>(),
                     label = "tab-pill",
                 )
@@ -171,7 +169,7 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                         .pressScale(press)
                         .clip(itemShape)
                         .background(pill, itemShape)
-                        .clickable(interactionSource = press, indication = ripple(color = colors.primary)) {
+                        .clickable(interactionSource = press, indication = ripple(color = Color.White)) {
                             haptic.buzz(HapticFeedbackType.SegmentTick)
                             onSelect(item)
                         },
@@ -179,10 +177,11 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         val label = stringResource(item.labelRes)
-                        Icon(tabIcon(item), label, tint = tint, modifier = Modifier.size(22.dp))
+                        ImmersiveIcon(tabIcon(item), label, size = 22.dp, alpha = if (selected) 1f else 0.72f)
                         Text(
                             label,
-                            color = tint,
+                            color = ink,
+                            style = MaterialTheme.typography.labelSmall.copy(shadow = ImmersiveShadow),
                             fontSize = 11.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                             maxLines = 1,

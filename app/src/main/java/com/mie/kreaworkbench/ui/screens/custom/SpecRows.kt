@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.LocaleList
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -22,13 +23,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -72,8 +79,17 @@ import com.mie.kreaworkbench.data.workflows.shownHelp
 import com.mie.kreaworkbench.data.workflows.videoSourceWarnLimit
 import com.mie.kreaworkbench.ui.components.CompactMenuField
 import com.mie.kreaworkbench.ui.components.CompactTextField
-import com.mie.kreaworkbench.ui.components.MiniField
+import com.mie.kreaworkbench.ui.components.GlassDanger
+import com.mie.kreaworkbench.ui.components.ImmersiveHairline
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
+import com.mie.kreaworkbench.ui.components.ImmersiveShadow
+import com.mie.kreaworkbench.ui.components.LocalGlassChrome
 import com.mie.kreaworkbench.ui.components.PromptField
+import com.mie.kreaworkbench.ui.components.glassChipColors
+import com.mie.kreaworkbench.ui.components.glassSliderColors
+import com.mie.kreaworkbench.ui.components.glassSwitchColors
+import com.mie.kreaworkbench.ui.components.glassTextFieldColors
 import com.mie.kreaworkbench.ui.locale.knownText
 import com.mie.kreaworkbench.util.VIDEO_WARN_BYTES
 import com.mie.kreaworkbench.util.VideoThumb
@@ -102,10 +118,18 @@ fun SpecRow(
     @StringRes cardTitle: Int? = null,
     onPickVideo: () -> Unit = {},
     onPickVideoGallery: () -> Unit = {},
+    allowDraw: Boolean = false,
 ) {
     val key = Specs.key(spec)
     val type = Specs.type(spec)
     val scheme = MaterialTheme.colorScheme
+    // 玻璃卡里（LocalGlassChrome = true）文字走首页那套白字：主标签纯白、副文浅白。
+    // 非玻璃（SpecRow 的默认用法）仍旧读主题色，不能改成永远白字。
+    val glassy = LocalGlassChrome.current
+    val labelInk = if (glassy) ImmersiveInk else scheme.onSurface
+    val metaInk = if (glassy) ImmersiveInkMuted else scheme.onSurfaceVariant
+    // 警告小字：玻璃上用浅红（和弹窗里的危险色同一支），深底上才看得清
+    val errInk = if (glassy) GlassDanger else scheme.error
     val rawLabel = Specs.label(spec)
     val label = knownText(rawLabel)
     // 提示词卡里的主提示词不再重复显示字段名（导入时自动生成的「节点标题 · prompt」之类），与 Krea2 一致只留卡片标题
@@ -122,28 +146,30 @@ fun SpecRow(
     val loraDim = loraEntry != null && !loraOn
     val loraCd = if (loraEntry != null) stringResource(R.string.lora_toggle_cd) else ""
     // 模型类 spec 不显示说明（旧定义里每个模型都带同一句 wf_help_model，重复占位）
-    val help = if (type == "model") "" else shownHelp(spec, vm.outputKind)
+    val helpRaw = if (type == "model") "" else shownHelp(spec, vm.outputKind)
+    val help = if (compactHint(helpRaw)) knownText(helpRaw) else ""
     // 抽卡只在文生图、且当前库有条目时出现。判定只走 isTextToImageWorkflow。
     val hasLib by vm.hasPromptLibrary.collectAsState()
-    val drawOk = hasLib && isTextToImageWorkflow(vm.outputKind, vm.specs)
+    val drawOk = allowDraw && hasLib && isTextToImageWorkflow(vm.outputKind, vm.specs)
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         // model 行不依赖 showLabel（round16：模型卡的 cardTitle 为 null 本来就显示标签）；
         // LoRA 单加载器在标签行右侧放开关
         if (showLabel || type == "model") {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = scheme.onSurface)
+                Text(label, style = MaterialTheme.typography.labelLarge, color = labelInk)
                 Spacer(Modifier.weight(1f))
                 if (loraEntry != null) {
                     Switch(
                         checked = loraOn,
                         onCheckedChange = { vm.setLoraOn(loraEntry.key, it) },
                         modifier = Modifier.semantics { contentDescription = loraCd },
+                        colors = specSwitchColors(),
                     )
                 }
             }
         }
         if (help.isNotBlank()) {
-            Text(knownText(help), fontSize = 11.sp, color = scheme.onSurfaceVariant)
+            Text(help, fontSize = 11.sp, color = metaInk)
         }
         Spacer(Modifier.height(6.dp))
         when (type) {
@@ -182,7 +208,7 @@ fun SpecRow(
                         Text(
                             pluralStringResource(R.plurals.draw_pool_count, n, n),
                             fontSize = 11.sp,
-                            color = scheme.onSurfaceVariant,
+                            color = metaInk,
                         )
                     }
                 }
@@ -226,7 +252,7 @@ fun SpecRow(
                         Text(
                             stringResource(R.string.choices_not_loaded),
                             fontSize = 11.sp,
-                            color = scheme.onSurfaceVariant,
+                            color = metaInk,
                         )
                     }
                 } else {
@@ -246,7 +272,7 @@ fun SpecRow(
                         Text(
                             stringResource(R.string.value_not_in_list),
                             fontSize = 11.sp,
-                            color = scheme.error,
+                            color = errInk,
                         )
                     }
                 }
@@ -270,7 +296,7 @@ fun SpecRow(
                         Text(
                             stringResource(R.string.choices_not_loaded),
                             fontSize = 11.sp,
-                            color = scheme.onSurfaceVariant,
+                            color = metaInk,
                         )
                     }
                 } else {
@@ -299,21 +325,13 @@ fun SpecRow(
                         Text(
                             stringResource(R.string.value_not_in_list),
                             fontSize = 11.sp,
-                            color = scheme.error,
+                            color = errInk,
                         )
                     }
                 }
                 if (loraEntry != null) {
                     Spacer(Modifier.height(6.dp))
                     LoraStrengthRow(vm, loraEntry, enabled = loraOn)
-                }
-                if (loraDim) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.lora_off_hint),
-                        fontSize = 11.sp,
-                        color = scheme.onSurfaceVariant,
-                    )
                 }
             }
             "int" -> {
@@ -339,17 +357,20 @@ fun SpecRow(
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = labelInk),
+                        colors = if (LocalGlassChrome.current) glassTextFieldColors() else OutlinedTextFieldDefaults.colors(),
                     )
                     FilterChip(
                         selected = random,
                         onClick = { if (!random) { vm.setRandom(key, true); vm.persist() } },
                         label = { Text(stringResource(R.string.label_random)) },
+                        colors = specChipColors(),
                     )
                     FilterChip(
                         selected = !random,
                         onClick = { if (random) { vm.setRandom(key, false); vm.persist() } },
                         label = { Text(stringResource(R.string.label_fixed)) },
+                        colors = specChipColors(),
                     )
                 }
             }
@@ -368,6 +389,7 @@ fun SpecRow(
                     },
                     valueRange = min.toFloat()..max.toFloat(),
                     steps = (intervals - 1).coerceAtLeast(0),
+                    colors = specSliderColors(),
                 )
                 CompactTextField(
                     value = vm.textValues[key].orEmpty(),
@@ -380,6 +402,7 @@ fun SpecRow(
                 Switch(
                     checked = vm.boolValues[key] ?: Specs.defaultBool(spec),
                     onCheckedChange = { vm.setBool(key, it); vm.persist() },
+                    colors = specSwitchColors(),
                 )
             }
             "image_sizes" -> {
@@ -439,8 +462,16 @@ fun SpecRow(
                         modifier = Modifier.height(40.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         shape = RoundedCornerShape(12.dp),
+                        colors = if (LocalGlassChrome.current) {
+                            ButtonDefaults.outlinedButtonColors(
+                                containerColor = Color.Transparent,
+                                contentColor = ImmersiveInk,
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        },
                     ) {
-                        Text(stringResource(R.string.label_custom), style = MaterialTheme.typography.labelMedium, color = scheme.onSurface, maxLines = 1)
+                        Text(stringResource(R.string.label_custom), style = MaterialTheme.typography.labelMedium, color = labelInk, maxLines = 1)
                     }
                 }
                 AnimatedVisibility(visible = expanded) {
@@ -452,21 +483,23 @@ fun SpecRow(
                         OutlinedTextField(
                             value = customW,
                             onValueChange = { customW = it.filter { ch -> ch.isDigit() }.take(4); applyCustom() },
-                            label = { Text(stringResource(R.string.label_width), color = scheme.onSurfaceVariant) },
+                            label = { Text(stringResource(R.string.label_width), color = metaInk) },
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = labelInk),
+                            colors = specFieldColors(),
                         )
-                        Text("×", color = scheme.onSurfaceVariant)
+                        Text("×", color = metaInk)
                         OutlinedTextField(
                             value = customH,
                             onValueChange = { customH = it.filter { ch -> ch.isDigit() }.take(4); applyCustom() },
-                            label = { Text(stringResource(R.string.label_height), color = scheme.onSurfaceVariant) },
+                            label = { Text(stringResource(R.string.label_height), color = metaInk) },
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = labelInk),
+                            colors = specFieldColors(),
                         )
                     }
                 }
@@ -474,7 +507,7 @@ fun SpecRow(
                     Text(
                         stringResource(R.string.size_unset, spec.optString("default")),
                         fontSize = 11.sp,
-                        color = scheme.onSurfaceVariant,
+                        color = metaInk,
                     )
                 }
                 }
@@ -488,9 +521,9 @@ fun SpecRow(
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(16.dp)),
                     )
-                    Text("${vm.srcW} × ${vm.srcH}", style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+                    Text("${vm.srcW} × ${vm.srcH}", style = MaterialTheme.typography.labelSmall, color = metaInk)
                 } else {
-                    Text(stringResource(R.string.no_image_yet), color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.no_image_yet), color = metaInk, style = MaterialTheme.typography.bodySmall)
                 }
                 Row {
                     OutlinedButton(onClick = onPickAlbum) { Text(stringResource(R.string.pick_album)) }
@@ -524,17 +557,17 @@ fun SpecRow(
                     }
                     val meta = videoMetaText(vm)
                     if (meta.isNotBlank()) {
-                        Text(stringResource(R.string.video_meta, meta), fontSize = 11.sp, color = scheme.onSurfaceVariant)
+                        Text(stringResource(R.string.video_meta, meta), fontSize = 11.sp, color = metaInk)
                     }
                     if (vm.videoSize >= VIDEO_WARN_BYTES) {
                         Text(
                             stringResource(R.string.video_large_warn, formatBytes(vm.videoSize)),
                             fontSize = 11.sp,
-                            color = scheme.error,
+                            color = errInk,
                         )
                     }
                 } else {
-                    Text(stringResource(R.string.no_video_yet), color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.no_video_yet), color = metaInk, style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(Modifier.height(6.dp))
                 // 按钮行用 FlowRow：窄屏放不下自动换行
@@ -567,6 +600,9 @@ private fun videoMetaText(vm: CustomModel): String = buildList {
 fun LoraStrengthRow(vm: CustomModel, entry: LoraEntry, enabled: Boolean) {
     if (entry.strengthFields.isEmpty()) return
     val scheme = MaterialTheme.colorScheme
+    // 玻璃卡里的副文用浅白（与 SpecRow 同一套），非玻璃仍是主题色
+    val metaInk = if (LocalGlassChrome.current) ImmersiveInkMuted else scheme.onSurfaceVariant
+    val errInk = if (LocalGlassChrome.current) GlassDanger else scheme.error
     val alphaMod = if (enabled) Modifier else Modifier.alpha(0.5f)
     val suffix = if (vm.loraEntries.size >= 2 && entry.nodeTitle != entry.classType) " · ${entry.nodeTitle}" else ""
     val single = entry.strengthFields.size == 1
@@ -582,7 +618,7 @@ fun LoraStrengthRow(vm: CustomModel, entry: LoraEntry, enabled: Boolean) {
                 Text(
                     stringResource(strengthLabelRes(f, single)) + suffix,
                     style = MaterialTheme.typography.labelMedium,
-                    color = scheme.onSurfaceVariant,
+                    color = metaInk,
                 )
                 Spacer(Modifier.height(4.dp))
                 CompactTextField(
@@ -597,7 +633,7 @@ fun LoraStrengthRow(vm: CustomModel, entry: LoraEntry, enabled: Boolean) {
                     Text(
                         stringResource(R.string.lora_strength_invalid),
                         fontSize = 11.sp,
-                        color = scheme.error,
+                        color = errInk,
                     )
                 }
             }
@@ -621,17 +657,21 @@ private fun strengthLabelRes(field: String, single: Boolean): Int = when {
 @Composable
 fun LoraToggleRow(vm: CustomModel, entry: LoraEntry) {
     val scheme = MaterialTheme.colorScheme
+    val glassy = LocalGlassChrome.current
+    val labelInk = if (glassy) ImmersiveInk else scheme.onSurface
+    val metaInk = if (glassy) ImmersiveInkMuted else scheme.onSurfaceVariant
     val on = vm.loraOn[entry.key] ?: entry.defaultOn
     val cd = stringResource(R.string.lora_toggle_cd)
     val linked = stringResource(R.string.lora_linked)
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("LoRA", style = MaterialTheme.typography.labelLarge, color = scheme.onSurface)
+            Text("LoRA", style = MaterialTheme.typography.labelLarge, color = labelInk)
             Spacer(Modifier.weight(1f))
             Switch(
                 checked = on,
                 onCheckedChange = { vm.setLoraOn(entry.key, it) },
                 modifier = Modifier.semantics { contentDescription = cd },
+                colors = specSwitchColors(),
             )
         }
         Spacer(Modifier.height(2.dp))
@@ -639,18 +679,10 @@ fun LoraToggleRow(vm: CustomModel, entry: LoraEntry) {
         Text(
             "$fileShown · ${entry.nodeTitle}",
             fontSize = 11.sp,
-            color = scheme.onSurfaceVariant,
+            color = metaInk,
         )
         Spacer(Modifier.height(6.dp))
         LoraStrengthRow(vm, entry, enabled = on)
-        if (!on) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                stringResource(if (entry.slot == null) R.string.lora_off_hint else R.string.lora_slot_off_hint),
-                fontSize = 11.sp,
-                color = scheme.onSurfaceVariant,
-            )
-        }
     }
 }
 
@@ -658,6 +690,11 @@ fun LoraToggleRow(vm: CustomModel, entry: LoraEntry) {
 @Composable
 private fun VideoSizeRow(vm: CustomModel, spec: JSONObject) {
     val scheme = MaterialTheme.colorScheme
+    // 视频尺寸行也可能画在玻璃卡里（生成页参数抽屉），文字跟着玻璃白化
+    val glassy = LocalGlassChrome.current
+    val labelInk = if (glassy) ImmersiveInk else scheme.onSurface
+    val metaInk = if (glassy) ImmersiveInkMuted else scheme.onSurfaceVariant
+    val errInk = if (glassy) GlassDanger else scheme.error
     val sel = vm.sizesSelected.singleOrNull()
     val source = sel == VIDEO_SIZE_SOURCE
     var customW by remember(Specs.key(spec)) { mutableStateOf("1280") }
@@ -713,26 +750,21 @@ private fun VideoSizeRow(vm: CustomModel, spec: JSONObject) {
             tooBig -> Text(
                 stringResource(R.string.video_size_warn, vm.srcW, vm.srcH, maxW, maxH),
                 fontSize = 11.sp,
-                color = scheme.error,
+                color = errInk,
             )
             vm.srcW > 0 && vm.srcH > 0 -> Text(
                 stringResource(R.string.video_size_use, vm.srcW, vm.srcH),
                 fontSize = 11.sp,
-                color = scheme.onSurfaceVariant,
+                color = metaInk,
             )
             else -> Text(
                 stringResource(R.string.video_size_fallback),
                 fontSize = 11.sp,
-                color = scheme.onSurfaceVariant,
+                color = metaInk,
             )
         }
     } else {
         Spacer(Modifier.height(8.dp))
-        Text(
-            stringResource(R.string.video_size_custom_hint),
-            fontSize = 11.sp,
-            color = scheme.onSurfaceVariant,
-        )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -741,68 +773,91 @@ private fun VideoSizeRow(vm: CustomModel, spec: JSONObject) {
             OutlinedTextField(
                 value = customW,
                 onValueChange = { customW = it.filter { ch -> ch.isDigit() }.take(4); commitCustom() },
-                label = { Text(stringResource(R.string.label_width), color = scheme.onSurfaceVariant) },
+                label = { Text(stringResource(R.string.label_width), color = metaInk) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = labelInk),
+                colors = specFieldColors(),
             )
-            Text("×", color = scheme.onSurfaceVariant)
+            Text("×", color = metaInk)
             OutlinedTextField(
                 value = customH,
                 onValueChange = { customH = it.filter { ch -> ch.isDigit() }.take(4); commitCustom() },
-                label = { Text(stringResource(R.string.label_height), color = scheme.onSurfaceVariant) },
+                label = { Text(stringResource(R.string.label_height), color = metaInk) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = labelInk),
+                colors = specFieldColors(),
             )
         }
     }
 }
 
-/** 抽卡共享筛选：分类下拉 + 包含 + 排除，所有 prompt_pool 抽卡共用（自 T2iScreen 移植）。 */
+/** 抽卡共享筛选（r21 收窄）：只保留分类下拉（「全部」及各类）。
+ *  包含/排除基本不用，UI 默认不渲染；vm.drawInc / vm.drawExc 状态字段保留
+ *  （空串即无筛选），抽卡过滤管线不用动，哪天要找回入口再加回两个 MiniField 即可。 */
 @Composable
 fun DrawFilterRow(vm: CustomModel) {
     val labels = drawCategoryLabels(vm.drawCategories)
     val idx = vm.drawCategories.indexOfFirst { it.second == vm.drawCat }.coerceAtLeast(0)
     val all = stringResource(R.string.label_all)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        CompactMenuField(
-            value = labels.getOrElse(idx) { all },
-            options = labels,
-            modifier = Modifier.weight(1.1f),
-        ) { i ->
-            vm.drawCategories.getOrNull(i)?.let { vm.onDrawCat(it.second) }
-        }
-        MiniField(stringResource(R.string.filter_include), vm.drawInc, { vm.onDrawInc(it) }, Modifier.weight(1f))
-        MiniField(stringResource(R.string.filter_exclude), vm.drawExc, { vm.onDrawExc(it) }, Modifier.weight(1f))
+    CompactMenuField(
+        value = labels.getOrElse(idx) { all },
+        options = labels,
+        modifier = Modifier.fillMaxWidth(),
+    ) { i ->
+        vm.drawCategories.getOrNull(i)?.let { vm.onDrawCat(it.second) }
     }
 }
 
-/** 无可用工作流时的空状态：生成页与设置页共用，按钮跳工作流/库页。 */
+/** 无可用工作流时的空状态：生成页与设置页共用，按钮跳工作流/库页。
+ *  [immersive] = 压在生成页的共享背景上：白字 + 阴影 + 玻璃按钮；其他页面保持原配色。 */
 @Composable
-fun WorkflowEmptyState(onGoImport: () -> Unit) {
+fun WorkflowEmptyState(onGoImport: () -> Unit, immersive: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
+    val ink = if (immersive) ImmersiveInk else scheme.onSurface
+    val muted = if (immersive) ImmersiveInkMuted else scheme.onSurfaceVariant
     Column(
         Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(stringResource(R.string.empty_workflows), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
+        Text(
+            stringResource(R.string.empty_workflows),
+            style = MaterialTheme.typography.titleMedium.copy(shadow = if (immersive) ImmersiveShadow else null),
+            color = ink,
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             stringResource(R.string.empty_workflows_body),
             fontSize = 12.sp,
-            color = scheme.onSurfaceVariant,
+            color = muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 12.dp),
         )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onGoImport, shape = RoundedCornerShape(16.dp)) {
+        Button(
+            onClick = onGoImport,
+            shape = RoundedCornerShape(16.dp),
+            colors = if (immersive) {
+                ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.18f),
+                    contentColor = ImmersiveInk,
+                )
+            } else {
+                ButtonDefaults.buttonColors()
+            },
+            border = if (immersive) BorderStroke(1.dp, ImmersiveHairline) else null,
+        ) {
             Text(stringResource(R.string.go_import))
         }
     }
 }
+
+/** 控件下的说明只留很短的用法提示。长句是内部说明，不挂到界面上。 */
+private fun compactHint(text: String): Boolean =
+    text.isNotBlank() && text.codePointCount(0, text.length) <= 10
 
 fun trimNum(d: Double): String =
     if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
@@ -822,7 +877,7 @@ private fun RangeHint(spec: JSONObject) {
                 max?.toInt()?.toString() ?: "∞",
             ),
             fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (LocalGlassChrome.current) ImmersiveInkMuted else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -864,3 +919,20 @@ private fun stringZh(@StringRes id: Int): String {
     }
     return zh.getString(id)
 }
+
+@Composable
+private fun specFieldColors() =
+    if (LocalGlassChrome.current) glassTextFieldColors() else OutlinedTextFieldDefaults.colors()
+
+@Composable
+private fun specSwitchColors() =
+    if (LocalGlassChrome.current) glassSwitchColors() else SwitchDefaults.colors()
+
+@Composable
+private fun specSliderColors() =
+    if (LocalGlassChrome.current) glassSliderColors() else SliderDefaults.colors()
+
+@Composable
+private fun specChipColors() =
+    if (LocalGlassChrome.current) glassChipColors() else FilterChipDefaults.filterChipColors()
+

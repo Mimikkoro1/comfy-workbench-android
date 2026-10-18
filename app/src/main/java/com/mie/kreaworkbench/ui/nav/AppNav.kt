@@ -23,6 +23,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -32,7 +35,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -57,15 +60,22 @@ import androidx.compose.ui.util.lerp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.BottomDock
+import com.mie.kreaworkbench.ui.components.GlassAlertDialog
+import com.mie.kreaworkbench.ui.components.GlassHostOverlay
+import com.mie.kreaworkbench.ui.components.GlassHostProvider
+import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ScreenHeader
-import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
+import com.mie.kreaworkbench.ui.components.UpdateDialog
 import com.mie.kreaworkbench.ui.motion.HERO_MS
 import com.mie.kreaworkbench.ui.motion.HeroEasing
 import com.mie.kreaworkbench.ui.motion.LocalAnimScope
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.screens.gallery.GalleryScreen
+import com.mie.kreaworkbench.ui.screens.custom.CustomModel
 import com.mie.kreaworkbench.ui.screens.custom.CustomScreen
 import com.mie.kreaworkbench.ui.screens.custom.WorkflowEmptyState
+import com.mie.kreaworkbench.ui.screens.gen.ImmersiveBackdrop
+import com.mie.kreaworkbench.ui.theme.LocalIsDark
 import com.mie.kreaworkbench.ui.screens.library.LibraryEditorScreen
 import com.mie.kreaworkbench.ui.screens.library.LibraryScreen
 import com.mie.kreaworkbench.ui.screens.library.WorkflowImportScreen
@@ -77,6 +87,7 @@ import com.mie.kreaworkbench.ui.screens.settings.ConnectionPage
 import com.mie.kreaworkbench.ui.screens.settings.SettingsHome
 import com.mie.kreaworkbench.ui.screens.viewer.ViewerScreen
 import android.net.Uri
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -143,6 +154,25 @@ fun AppNav(nav: NavModel) {
     val scene = sceneOf(stack)
     val scope = rememberCoroutineScope()
 
+    // r27.2：全 App 唯一一份背景的数据源。CustomModel 是 Activity 级 ViewModel，
+    // 和 HomeLayer 里拿到的是同一个实例。
+    val rootVm: CustomModel = viewModel()
+    val rootMedia = rootVm.mediaResults()
+    val rootNewResultId by rootVm.lastResultId.collectAsState()
+    val rootWorkflow by nav.workflow.collectAsState()
+    val rootAwaitingMedia = !rootVm.mediaLoaded
+    // 背景在这些场景显示：生成页 / 图库 / 看图页，以及 r29 玻璃化的设置二级页与关于页。
+    // 设置子页原先不挂背景（怕透出图片），但那样玻璃卡没有东西可模糊、只剩一块均匀暗底，
+    // 真机看着还是素皮；现在跟设置 tab 一样透背景 + 薄纱。
+    // 导入、词库编辑仍不显示，避免编辑长文本时背后有图。
+    // 看图页也挂着（被它自己的黑底盖住）：进/出看图页的淡入淡出期间不会突然露出窗口白底。
+    val showRootBackdrop = when (scene) {
+        Scene.Home, Scene.Gallery, is Scene.Viewer,
+        Scene.About, Scene.SettingsConnection, Scene.SettingsBackground, Scene.SettingsAppearance,
+        -> true
+        else -> false
+    }
+
     // E4: ONE seekable transition drives every overlay change. Button back / push animate it with
     // animateTo(); the predictive back gesture seeks the very same pop transition with the finger
     // (exiting page on top slides right + shrinks, previous page underneath scales/fades in), then on
@@ -201,7 +231,25 @@ fun AppNav(nav: NavModel) {
         }
     }
 
+    GlassHostProvider {
     Box(Modifier.fillMaxSize()) {
+        // r27.2：背景只有这一份，并且画在 AnimatedContent 下面（z 更低）。
+        // 进出图库、进出看图页、切 tab 都不会拆它，所以背景图不会「先消失再冲出来」。
+        if (showRootBackdrop) {
+            ImmersiveBackdrop(
+                image = rootMedia.firstOrNull(),
+                onOpen = {
+                    // 只有生成页的沉浸态，点空白才进看图。图库/看图页里背景不响应点击。
+                    if (scene == Scene.Home && nav.tab == AppTab.T2I && rootWorkflow.isNotBlank()) {
+                        val ids = rootMedia.take(20).map { it.id }
+                        if (ids.isNotEmpty()) nav.openViewer(ids, 0)
+                    }
+                },
+                slideInKey = rootNewResultId,
+                cacheKey = "root",
+                awaitingMedia = rootAwaitingMedia,
+            )
+        }
         transition.AnimatedContent(
             modifier = Modifier.fillMaxSize(),
             transitionSpec = {
@@ -246,11 +294,12 @@ fun AppNav(nav: NavModel) {
                 SceneBody(target, nav, holder)
             }
         }
+        GlassHostOverlay()
     }
 
     // 「用于图生图」有多个带参考图工作流时弹列表选择（决策 5）
     nav.i2iChooser?.let { targets ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { nav.dismissI2iChooser() },
             title = { Text(stringResource(R.string.i2i_title)) },
             text = {
@@ -271,6 +320,11 @@ fun AppNav(nav: NavModel) {
             confirmButton = {},
             dismissButton = { TextButton(onClick = { nav.dismissI2iChooser() }) { Text(stringResource(R.string.action_cancel)) } },
         )
+    }
+
+    // r29：新版本对话框改成玻璃弹层，必须挂在 GlassHostProvider 里才画得出来
+    // （以前在 MainActivity 用系统 AlertDialog，现在跟着玻璃宿主走）。
+    UpdateDialog()
     }
 }
 @Composable
@@ -308,14 +362,44 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
 @Composable
 private fun HomeLayer(nav: NavModel, holder: SaveableStateHolder) {
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val wf by nav.workflow.collectAsState()
+    val immersive = nav.tab == AppTab.T2I && wf.isNotBlank()
     CompositionLocalProvider(LocalExtraBottom provides 88.dp + navBottom) {
         Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().hazeSourceIfEnabled()) {
-                TabPager(nav, holder)
+            // r27.2：共享背景已提到 AppNav 根，这里只留非沉浸页的遮罩和内容。
+            // r28：工作流/库、模型两页改成玻璃卡，遮罩要薄一点，否则背景被糊死、玻璃看不出来。
+            // r29：设置页也玻璃化了，跟着走同一套薄纱；生成空态仍用厚遮罩。
+            if (!immersive) {
+                ReadabilityScrim(
+                    thin = nav.tab == AppTab.WORKFLOWS || nav.tab == AppTab.MODELS || nav.tab == AppTab.SETTINGS,
+                )
             }
+            TabPager(nav, holder)
             BottomDock(nav.tab, { nav.tab = it }, Modifier.align(Alignment.BottomCenter))
         }
     }
+}
+
+/** 非生成页压一层遮罩，卡片和文字才看得清。点空白不进看图。
+ *  厚遮罩（默认）：生成空态用，保持原来的样子。
+ *  薄遮罩（[thin]）：工作流/库、模型、设置页用——这几页的卡片/列表是玻璃的，遮罩太厚背景透不出来，
+ *  玻璃等于白做。薄遮罩两个主题都用深色底：页内文字是白字体系，浅色主题若用白遮罩，
+ *  白字会直接糊在浅色背景上。α 数值 r28 已定，别再动。 */
+@Composable
+private fun ReadabilityScrim(thin: Boolean = false) {
+    val dark = LocalIsDark.current
+    val veil = when {
+        !thin -> if (dark) Color.Black.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.85f)
+        dark -> Color.Black.copy(alpha = 0.48f)
+        else -> Color.Black.copy(alpha = 0.52f)
+    }
+    val eat = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(veil)
+            .clickable(interactionSource = eat, indication = null, onClick = {}),
+    )
 }
 
 @Composable
@@ -345,8 +429,6 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
                                 nav.pendingI2iWorkflowId = null
                             },
                             onGallery = { nav.push(Overlay.Gallery) },
-                            onOpen = { ids, index -> nav.openViewer(ids, index) },
-                            onWorkflows = { nav.tab = AppTab.WORKFLOWS },
                         )
                     }
                 }
@@ -358,18 +440,22 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
     }
 }
 
-/** 生成 tab 的空状态（无可用工作流时）：文案 + 「去导入工作流」。 */
+/** 生成 tab 的空状态（无可用工作流时）：文案 + 「去导入工作流」。
+ *  r27：空态也走沉浸风——铺一层深色，白字 + 玻璃按钮；浅色主题下 ReadabilityScrim 是浅色的，
+ *  不铺这层就会白底白字。 */
 @Composable
 private fun GenEmptyTab(onImport: () -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader(stringResource(R.string.tab_generate))
-        Column(
-            Modifier.weight(1f).padding(horizontal = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.weight(1f))
-            WorkflowEmptyState(onGoImport = onImport)
-            Spacer(Modifier.weight(1.2f))
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f))) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader(stringResource(R.string.tab_generate), ink = ImmersiveInk)
+            Column(
+                Modifier.weight(1f).padding(horizontal = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.weight(1f))
+                WorkflowEmptyState(onGoImport = onImport, immersive = true)
+                Spacer(Modifier.weight(1.2f))
+            }
         }
     }
 }

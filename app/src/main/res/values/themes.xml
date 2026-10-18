@@ -12,6 +12,9 @@
         <item name="android:windowBackground">@color/window_bg</item>
         <item name="android:colorBackground">@color/window_bg</item>
         <item name="android:windowSplashScreenBackground">@color/window_bg</item>
+        <!-- r29.1：启动页只显示紫色 logomark，透明底（不再借 adaptive icon 的白底圆）。 -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
         <item name="android:windowAnimationStyle">@style/Animation.Krea.NoWindow</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>

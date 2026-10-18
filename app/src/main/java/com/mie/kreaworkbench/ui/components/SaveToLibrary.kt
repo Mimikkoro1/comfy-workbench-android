@@ -3,22 +3,20 @@
 package com.mie.kreaworkbench.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +35,7 @@ import com.mie.kreaworkbench.data.library.LibraryMeta
 /**
  * 「存入提示词库」选择弹窗（round6）：点已有库直接写入；或新建库（默认名「反推」）。
  * onSave(libId=null, newName) = 新建并写入；onSave(libId, "") = 写入已有库。异步与提示由调用方处理。
+ * r27：换成同窗口玻璃底部弹层，生成页与看图页共用同一套观感。
  */
 @Composable
 fun SaveToLibrarySheet(
@@ -47,17 +46,13 @@ fun SaveToLibrarySheet(
     val defaultName = stringResource(R.string.default_library_name)
     var creating by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf(defaultName) }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    ) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp)) {
-            Text(stringResource(R.string.save_library_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
+    GlassBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Text(
-                stringResource(R.string.save_library_body),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                stringResource(R.string.save_library_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = ImmersiveInk,
             )
             Spacer(Modifier.height(8.dp))
             if (creating) {
@@ -66,9 +61,10 @@ fun SaveToLibrarySheet(
                     onValueChange = { newName = it.take(24) },
                     singleLine = true,
                     label = { Text(stringResource(R.string.new_library_name)) },
+                    colors = glassTextFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = { creating = false }) { Text(stringResource(R.string.action_back)) }
                     TextButton(
                         onClick = {
@@ -96,11 +92,11 @@ fun SaveToLibrarySheet(
                                 .padding(vertical = 10.dp, horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(lib.name, Modifier.weight(1f), maxLines = 1)
+                            Text(lib.name, Modifier.weight(1f), maxLines = 1, color = ImmersiveInk)
                             Text(
                                 pluralStringResource(R.plurals.entry_count, lib.count, lib.count),
                                 fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = ImmersiveInkMuted,
                             )
                         }
                     }

@@ -15,11 +15,20 @@ import androidx.lifecycle.viewModelScope
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.data.api.trimBase
 import com.mie.kreaworkbench.data.buildCustomBody
+import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
+import com.mie.kreaworkbench.data.gacha.GACHA_MAX_COUNT
+import com.mie.kreaworkbench.data.gacha.GACHA_PROMPT_CAP
+import com.mie.kreaworkbench.data.gacha.GachaCatalog
+import com.mie.kreaworkbench.data.gacha.GachaMaster
+import com.mie.kreaworkbench.data.gacha.GachaOptions
+import com.mie.kreaworkbench.data.gacha.GachaRequest
+import com.mie.kreaworkbench.data.gacha.GachaSelection
+import com.mie.kreaworkbench.data.gacha.correctGachaSelection
 import com.mie.kreaworkbench.data.db.ImageRow
 import com.mie.kreaworkbench.data.db.JobRow
 import com.mie.kreaworkbench.data.settings.UserSettings
-import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.data.workflows.LoraEntry
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_720P
@@ -27,6 +36,7 @@ import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_SOURCE
 import com.mie.kreaworkbench.data.workflows.loraManagedSpecKeys
 import com.mie.kreaworkbench.data.workflows.loraStrengthKey
 import com.mie.kreaworkbench.data.workflows.loraEntries as loraEntriesOf
+import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.data.workflows.pickOutputNode
 import com.mie.kreaworkbench.data.workflows.resolveLoraOn
@@ -68,6 +78,9 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     val settings = c.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UserSettings())
     val live = c.engine.snapshot
 
+    /** r27.1：最近一次生成完成落库的行 id（引擎事件）。生成页背景只在这张图出现时播换图滑入。 */
+    val lastResultId = c.engine.lastResultId
+
     /** 抽卡可用性：当前提示词库存在且条目数 > 0。导入/删除/切库实时生效，UI 据此显隐抽卡相关控件。 */
     val hasPromptLibrary: StateFlow<Boolean> = combine(
         c.library.libraries,
@@ -94,11 +107,60 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     var loading by mutableStateOf(true)
         private set
+
+    /**
+     * r27.2：媒体列表是否至少完成过一次读库。
+     * 冷启动首帧 gallery 一定是空的；用这个标记让背景知道「还没加载完」，
+     * 从而画深色底而不是先闪一下 GlassFallback 兜底图。
+     */
+    var mediaLoaded by mutableStateOf(false)
+        private set
+
     var displayName by mutableStateOf("")
         private set
     var message by mutableStateOf("")
     var submitting by mutableStateOf(false)
     var drawingKey by mutableStateOf("")
+
+    // 高级抽卡。本地开关立刻生效，同时写入设置；抽卡请求读这份，不等 DataStore 回写。
+    var advOn by mutableStateOf<Boolean?>(null)
+    var hidePromptPick by mutableStateOf<Boolean?>(null)
+    var gachaModePick by mutableStateOf<String?>(null)
+    var gachaMasterPick by mutableStateOf<String?>(null)
+    var gachaOutfitPick by mutableStateOf<String?>(null)
+    var gachaPoolPick by mutableStateOf<String?>(null)
+    var gachaCategoryPick by mutableStateOf<String?>(null)
+    var gachaMasters by mutableStateOf<List<GachaMaster>>(emptyList())
+        private set
+    /** 服端动态筛选项。null = 旧服没给 options（UI 回退写死列表）；非 null 时空数组 = 该框不画。 */
+    var gachaOptions by mutableStateOf<GachaOptions?>(null)
+        private set
+    var gachaMastersError by mutableStateOf("")
+        private set
+    var gachaMastersLoaded by mutableStateOf(false)
+        private set
+    var gachaDrawing by mutableStateOf(false)
+        private set
+
+    /** 高级抽卡的临时提示词。非空时生成用这句，不关高级抽卡。换工作流就丢掉。 */
+    var tempPrompt by mutableStateOf("")
+        private set
+    /** 临时词钉（r28.1）：钉住 = 生成成功后保留这句；不钉（默认）= 成功后自动清空。只在内存里，不进设置。 */
+    var tempPromptPinned by mutableStateOf(false)
+        private set
+
+    fun advEnabled(saved: Boolean): Boolean = advOn ?: saved
+    fun hidePromptOn(saved: Boolean): Boolean = hidePromptPick ?: saved
+
+    fun gachaRequest(s: UserSettings, count: Int) = GachaRequest(
+        base = s.advGachaUrl.trim(),
+        mode = gachaModePick ?: s.advGachaMode.ifBlank { "wallpaper" },
+        count = count,
+        master = gachaMasterPick ?: s.advGachaMaster,
+        category = gachaCategoryPick ?: s.advGachaCategory,
+        outfit = gachaOutfitPick ?: s.advGachaOutfit.ifBlank { "random" },
+        pool = gachaPoolPick ?: s.advGachaPool.ifBlank { "auto" },
+    )
     var results by mutableStateOf<List<ImageRow>>(emptyList())
     var gallery by mutableStateOf<List<ImageRow>>(emptyList())
 
@@ -190,14 +252,6 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     /** 单尺寸化（direct10c）：尺寸恒为一个，张数只由 batch 决定。 */
     fun sizeCount(): Int = 1
 
-    /** 右上角下拉直切的数据源：WorkflowStore 的 meta 列表（与工作流/库页同一份，不另建存储）。 */
-    val workflowList: StateFlow<List<ImportedWorkflowMeta>> = c.workflowStore.workflows
-
-    /** 右上角下拉直切：只改 currentWorkflow，CustomScreen 因 workflowId 变化自动走 bind()（含刷盘与文本卡清理）。 */
-    fun selectWorkflow(id: String) {
-        viewModelScope.launch { c.settings.update { it.copy(currentWorkflow = id) } }
-    }
-
     fun totalCount(): Int = sizeCount() * batchSize
 
     /**
@@ -237,6 +291,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         val pendingFlush = persistJob?.isActive == true
         persistJob?.cancel()
         boundId = id
+        tempPrompt = ""
+        tempPromptPinned = false
         // 换绑时清掉上一个工作流残留的参考图选择（图片字段不持久化）
         sourcePath = null
         sourceUri = null
@@ -296,7 +352,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun restore(id: String) {
         val saved = c.workflowStore.lastValues(id)
-        batchSize = saved.optInt("batch", c.settings.current().batch).coerceIn(1, 8)
+        batchSize = saved.optInt("batch", c.settings.current().batch).coerceIn(1, 10)
         val values = saved.optJSONObject("values") ?: JSONObject()
         sizesSelected = saved.optJSONArray("sizes")?.let { arr ->
             buildList { for (i in 0 until arr.length()) arr.optString(i).takeIf { s -> s.isNotBlank() }?.let { add(it) } }
@@ -500,7 +556,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setBatch(n: Int) {
-        batchSize = n.coerceIn(1, 8)
+        batchSize = n.coerceIn(1, 10)
     }
 
     fun setIntText(key: String, raw: String) {
@@ -603,6 +659,13 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             srcW = w
             srcH = h
         }
+    }
+
+    fun clearSource() {
+        sourcePath = null
+        sourceUri = null
+        srcW = 0
+        srcH = 0
     }
 
     // ---- 视频选择（file:video，round17）：系统选择器 / 图库两个来源，互斥，后选覆盖先选 ----
@@ -727,126 +790,358 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun updateGacha(block: (UserSettings) -> UserSettings) {
+        viewModelScope.launch { c.settings.update(block) }
+    }
+
+    fun setAdvGacha(on: Boolean) {
+        advOn = on
+        updateGacha { it.copy(advGacha = on) }
+    }
+
+    fun dismissGachaGuide() {
+        updateGacha { it.copy(advGachaGuideOff = true) }
+    }
+
+    fun setHideGachaPrompt(on: Boolean) {
+        hidePromptPick = on
+        updateGacha { it.copy(advGachaHidePrompt = on) }
+    }
+
+    fun pickGachaMode(value: String) {
+        gachaModePick = value
+        updateGacha { it.copy(advGachaMode = value) }
+    }
+
+    fun pickGachaMaster(value: String) {
+        // r32：选中母版立刻按它的 has_nude / has_signature 校正其它维，
+        // 比如从有 nude 的母版切到没有的，mode 不能停在 nude。
+        val after = correctGachaSelection(
+            currentGachaSelection(settings.value).copy(master = value),
+            gachaMasters,
+            gachaOptions,
+        )
+        applyGachaSelection(after)
+        updateGacha {
+            it.copy(
+                advGachaMaster = after.master,
+                advGachaMode = after.mode,
+                advGachaOutfit = after.outfit,
+                advGachaCategory = after.category,
+                advGachaPool = after.pool,
+            )
+        }
+    }
+
+    fun pickGachaOutfit(value: String) {
+        gachaOutfitPick = value
+        updateGacha { it.copy(advGachaOutfit = value) }
+    }
+
+    fun pickGachaPool(value: String) {
+        gachaPoolPick = value
+        updateGacha { it.copy(advGachaPool = value) }
+    }
+
+    fun pickGachaCategory(value: String) {
+        gachaCategoryPick = value
+        updateGacha { it.copy(advGachaCategory = value) }
+    }
+
+    fun editTempPrompt(text: String) {
+        tempPrompt = text.take(GACHA_PROMPT_CAP)
+    }
+
+    /** 钉住 / 取消钉住。钉住后生成成功不清空，方便同一句连着出几张。 */
+    fun toggleTempPin() {
+        tempPromptPinned = !tempPromptPinned
+    }
+
+    /** 手动清空 = 回到默认（不钉）：清完下次点生成就照常去抽卡。 */
+    fun clearTempPrompt() {
+        tempPrompt = ""
+        tempPromptPinned = false
+    }
+
+    fun refreshGachaMasters() {
+        viewModelScope.launch {
+            // r32：刷新一开始就清目录。切到另一台抽卡服时，旧母版/旧筛选项一项都不许留着，
+            // 否则用户看到的是上一台服的菜单，点了只会白跑。
+            gachaMasters = emptyList()
+            gachaOptions = null
+            gachaMastersLoaded = false
+            gachaMastersError = ""
+            try {
+                val snapshot = c.settings.current()
+                val base = snapshot.advGachaUrl.trim()
+                val catalog = c.gacha.catalog(base)
+                gachaMasters = catalog.masters
+                gachaOptions = catalog.options
+                gachaMastersError = ""
+                applyCorrectedGacha(catalog, snapshot)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 失败同样是空目录 + 错误，不保留上一台服务器的任何东西（r31 母版清空扩展到 options）
+                gachaMasters = emptyList()
+                gachaOptions = null
+                gachaMasterPick = ""
+                gachaMastersError = e.message ?: e.javaClass.simpleName
+            } finally {
+                gachaMastersLoaded = true
+            }
+        }
+    }
+
+    /** 当前选中的五个 id（运行时 pick 优先，其次设置里持久化的值）。 */
+    private fun currentGachaSelection(s: UserSettings): GachaSelection = GachaSelection(
+        mode = gachaModePick ?: s.advGachaMode.ifBlank { "wallpaper" },
+        master = gachaMasterPick ?: s.advGachaMaster,
+        outfit = gachaOutfitPick ?: s.advGachaOutfit.ifBlank { "random" },
+        category = gachaCategoryPick ?: s.advGachaCategory,
+        pool = gachaPoolPick ?: s.advGachaPool.ifBlank { "auto" },
+    )
+
+    private fun applyGachaSelection(sel: GachaSelection) {
+        gachaModePick = sel.mode
+        gachaMasterPick = sel.master
+        gachaOutfitPick = sel.outfit
+        gachaCategoryPick = sel.category
+        gachaPoolPick = sel.pool
+    }
+
+    /** 用新目录校正脏选中；值变了顺手写回设置，免得下次冷启动又拿旧 id 发请求。 */
+    private fun applyCorrectedGacha(catalog: GachaCatalog, s: UserSettings) {
+        val before = currentGachaSelection(s)
+        val after = correctGachaSelection(before, catalog.masters, catalog.options)
+        applyGachaSelection(after)
+        if (after != before) {
+            updateGacha {
+                it.copy(
+                    advGachaMode = after.mode,
+                    advGachaMaster = after.master,
+                    advGachaOutfit = after.outfit,
+                    advGachaCategory = after.category,
+                    advGachaPool = after.pool,
+                )
+            }
+        }
+    }
+
     // ---- 生成 ----
 
     fun generate() {
-        val id = boundId ?: return
-        val wf = workflowJson ?: return
+        if (submitting) return
         viewModelScope.launch {
             submitting = true
             message = ""
             try {
-                // 每次提交用独立的任务 id：jobs 表主键（CONFLICT_REPLACE）、图片下载去重
-                // （hasLocal(cq_<id>, idx)）、engine 的 running/live 全以它为 key——
-                // 复用工作流 UUID 会让同一工作流第二次出图覆盖上一条任务行、同 job_id 同 idx 全部跳过下载
-                val jobClientId = UUID.randomUUID().toString()
-                val values = JSONObject()
-                for (spec in specs) {
-                    val key = Specs.key(spec)
-                    when (Specs.type(spec)) {
-                        "text", "prompt_pool" -> values.put(key, textValues[key].orEmpty())
-                        "select" -> values.put(key, textValues[key].orEmpty())
-                        "model" -> textValues[key].orEmpty().takeIf { it.isNotBlank() }?.let { values.put(key, it) }
-                        "int" -> values.put(key, clampSpec(spec, textValues[key]).toLong())
-                        "int_random" -> values.put(key, textValues[key]?.toLongOrNull() ?: 0L)
-                        "float" -> values.put(key, clampSpec(spec, textValues[key]))
-                        "bool" -> values.put(key, boolValues[key] ?: Specs.defaultBool(spec))
-                        "image_sizes" -> {
-                            val selected = sizesSelected.singleOrNull()
-                            // source 先占成 720P；下面若读到参考图再换成它的像素。没有参考图就不拦截。
-                            val payload = if (outputKind == "video" && selected == VIDEO_SIZE_SOURCE) {
-                                JSONArray().put(VIDEO_SIZE_720P)
-                            } else {
-                                JSONArray(sizesSelected)
-                            }
-                            values.put(key, payload)
-                        }
-                    }
-                }
-                val firstRandom = specs.firstOrNull { Specs.type(it) == "int_random" }
-                val seed = firstRandom?.let { textValues[Specs.key(it)]?.toLongOrNull() ?: 0L } ?: 0L
-                val seedRandom = firstRandom?.let { randomOn[Specs.key(it)] ?: Specs.randomDefault(it) } ?: true
-                // LoRA 开关 / 强度（round16）：框文本非法或空时放工作流原值，保证发出去的一定是数字；
-                // 关着的 entry 也照常带强度（applyLoraStates 会忽略），便于续传 / 重试时状态一致
-                var loraStates: JSONObject? = null
-                var loraStrengths: JSONObject? = null
-                if (loraEntries.isNotEmpty()) {
-                    val keys = loraEntries.map { it.key }.toSet()
-                    val states = JSONObject()
-                    loraOn.forEach { (k, v) -> if (k in keys) states.put(k, v) }
-                    val strengths = JSONObject()
-                    for (e in loraEntries) {
-                        for (f in e.strengthFields) {
-                            val sk = loraStrengthKey(e.key, f)
-                            val v = loraStrength[sk]?.toDoubleOrNull()?.takeIf { it.isFinite() }
-                                ?: e.strengthDefaults[f]
-                                ?: continue
-                            strengths.put(sk, v)
-                        }
-                    }
-                    if (states.length() > 0) loraStates = states
-                    if (strengths.length() > 0) loraStrengths = strengths
-                }
-                val body = buildCustomBody(
-                    clientId = jobClientId,
-                    workflowId = id,
-                    prompt = mainPrompt(),
-                    values = values,
-                    batch = batchSize,
-                    seed = seed,
-                    seedRandom = seedRandom,
-                    outputNode = outputNode,
-                    outputKind = outputKind,
-                    workflowName = displayName.takeIf { it.isNotBlank() && it != id }
-                        ?: c.workflowStore.labelOf(id).orEmpty(),
-                    loraStates = loraStates,
-                    loraStrengths = loraStrengths,
-                )
-                // 参考图：按原样暂存直传（与图生图一致，压缩只在上传超时/失败且用户确认后进行）；
-                // 暂存文件名跟任务 id 走，避免同工作流两个任务共用/互删同一个 uploads 文件
-                val hasImageSpec = specs.any { Specs.type(it) == "file:image" }
-                val hasVideoSpec = specs.any { Specs.type(it) == "file:video" }
-                if (hasVideoSpec) {
-                    if (videoUri == null && videoPath == null) {
-                        message = getApplication<Application>().str(R.string.err_need_video)
-                        return@launch
-                    }
-                    // 返回 null = stageVideo 已给 message，不提交
-                    val staged = withContext(Dispatchers.IO) { stageVideo(getApplication(), jobClientId) }
-                        ?: return@launch
-                    body.put("local_video", staged.absolutePath)
-                }
-                if (hasImageSpec) {
-                    if (sourcePath == null && sourceUri == null) {
-                        message = getApplication<Application>().str(R.string.err_need_reference)
-                        return@launch
-                    }
-                    val original = withContext(Dispatchers.IO) { stageOriginal(getApplication(), jobClientId) }
-                    body.put("local_jpeg", original.absolutePath)
-                    if (outputKind == "video" && sizesSelected.singleOrNull() == VIDEO_SIZE_SOURCE) {
-                        val (w, h) = withContext(Dispatchers.IO) { decodeBounds(original) }
-                        if (w >= 16 && h >= 16) {
-                            val sizeSpec = specs.firstOrNull { Specs.type(it) == "image_sizes" }
-                            if (sizeSpec != null) {
-                                body.optJSONObject("values")?.put(Specs.key(sizeSpec), JSONArray().put("${w}x${h}"))
-                            }
-                        }
-                    }
-                }
-                val now = System.currentTimeMillis()
-                withContext(Dispatchers.IO) {
-                    c.db.insertJob(
-                        JobRow(jobClientId, "", "custom", if (hasImageSpec || hasVideoSpec) "uploading" else "pending", body.toString(), now, now, totalCount(), 0, ""),
-                    )
-                }
-                persistNow(boundId)
-                startGenerationService(getApplication())
+                enqueueCurrent(promptOverride = null, batchOverride = null)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 message = e.message ?: e.javaClass.simpleName
             } finally {
                 submitting = false
             }
         }
+    }
+
+    /** 底部生成按钮。高级抽卡开着且是文生图时，按当前张数去抽词再逐条入队。临时词优先，不关高级抽卡。 */
+    fun generateFromButton() {
+        val on = advEnabled(settings.value.advGacha) && isTextToImageWorkflow(outputKind, specs)
+        val temp = tempPrompt.trim()
+        if (on && temp.isNotBlank()) runTempPrompt(temp) else if (on) drawAdvanced(batchSize) else generate()
+    }
+
+    /** 用临时词跑当前张数。每张各排一个任务，和抽卡的张数一样，但不去抽卡服务要词。
+     *  r28.1：全部排进队列后（= 这句确实用上了）没钉就清空，下次回到抽卡；钉住则保留。
+     *  中途失败会提前 return，不会清空。 */
+    private fun runTempPrompt(text: String) {
+        if (gachaDrawing || submitting) return
+        val n = batchSize.coerceIn(1, GACHA_MAX_COUNT)
+        viewModelScope.launch {
+            gachaDrawing = true
+            submitting = true
+            message = ""
+            try {
+                repeat(n) {
+                    if (!enqueueCurrent(text, batchOverride = 1)) return@launch
+                }
+                if (!tempPromptPinned) clearTempPrompt()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = e.message ?: e.javaClass.simpleName
+            } finally {
+                gachaDrawing = false
+                submitting = false
+            }
+        }
+    }
+
+    /** 高级抽卡：向电脑上的抽卡页要词，每条词各排一个出图任务。不出图请求不打到那个服务的 /api/comfy。 */
+    fun drawAdvanced(count: Int) {
+        if (gachaDrawing || submitting) return
+        val n = count.coerceIn(1, GACHA_MAX_COUNT)
+        viewModelScope.launch {
+            gachaDrawing = true
+            submitting = true
+            message = ""
+            try {
+                val req = gachaRequest(c.settings.current(), n)
+                val base = trimBase(req.base).ifBlank { DEFAULT_ADV_GACHA_URL }
+                val prompts = c.gacha.draw(req.copy(base = base, count = n))
+                if (prompts.isEmpty()) {
+                    message = getApplication<Application>().str(R.string.err_gacha_empty)
+                    return@launch
+                }
+                for (prompt in prompts) {
+                    if (!enqueueCurrent(prompt, batchOverride = 1)) return@launch
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = e.message ?: e.javaClass.simpleName
+            } finally {
+                gachaDrawing = false
+                submitting = false
+            }
+        }
+    }
+
+    /**
+     * 排一个出图任务。promptOverride 非空时写入主提示词槽和任务上的 prompt（图片信息读这个）。
+     * @return false = 已经写了 message，调用方不要再往下排。
+     */
+    private suspend fun enqueueCurrent(promptOverride: String?, batchOverride: Int?): Boolean {
+        val id = boundId ?: return false
+        if (workflowJson == null) return false
+        val app = getApplication<Application>()
+        val batchForJob = batchOverride ?: batchSize
+        val jobClientId = UUID.randomUUID().toString()
+        val values = JSONObject()
+        for (spec in specs) {
+            val key = Specs.key(spec)
+            when (Specs.type(spec)) {
+                "text", "prompt_pool" -> values.put(key, textValues[key].orEmpty())
+                "select" -> values.put(key, textValues[key].orEmpty())
+                "model" -> textValues[key].orEmpty().takeIf { it.isNotBlank() }?.let { values.put(key, it) }
+                "int" -> values.put(key, clampSpec(spec, textValues[key]).toLong())
+                "int_random" -> values.put(key, textValues[key]?.toLongOrNull() ?: 0L)
+                "float" -> values.put(key, clampSpec(spec, textValues[key]))
+                "bool" -> values.put(key, boolValues[key] ?: Specs.defaultBool(spec))
+                "image_sizes" -> {
+                    val selected = sizesSelected.singleOrNull()
+                    val payload = if (outputKind == "video" && selected == VIDEO_SIZE_SOURCE) {
+                        JSONArray().put(VIDEO_SIZE_720P)
+                    } else {
+                        JSONArray(sizesSelected)
+                    }
+                    values.put(key, payload)
+                }
+            }
+        }
+        val shownPrompt = if (promptOverride != null) {
+            val key = mainPromptKey()
+            if (key == null) {
+                message = app.str(R.string.err_gacha_no_prompt_slot)
+                return false
+            }
+            val text = promptOverride.trim().take(GACHA_PROMPT_CAP)
+            if (text.isBlank()) {
+                message = app.str(R.string.err_gacha_empty)
+                return false
+            }
+            values.put(key, text)
+            text
+        } else {
+            mainPrompt()
+        }
+        val firstRandom = specs.firstOrNull { Specs.type(it) == "int_random" }
+        val seed = firstRandom?.let { textValues[Specs.key(it)]?.toLongOrNull() ?: 0L } ?: 0L
+        val seedRandom = firstRandom?.let { randomOn[Specs.key(it)] ?: Specs.randomDefault(it) } ?: true
+        var loraStates: JSONObject? = null
+        var loraStrengths: JSONObject? = null
+        if (loraEntries.isNotEmpty()) {
+            val keys = loraEntries.map { it.key }.toSet()
+            val states = JSONObject()
+            loraOn.forEach { (k, v) -> if (k in keys) states.put(k, v) }
+            val strengths = JSONObject()
+            for (e in loraEntries) {
+                for (f in e.strengthFields) {
+                    val sk = loraStrengthKey(e.key, f)
+                    val v = loraStrength[sk]?.toDoubleOrNull()?.takeIf { it.isFinite() }
+                        ?: e.strengthDefaults[f]
+                        ?: continue
+                    strengths.put(sk, v)
+                }
+            }
+            if (states.length() > 0) loraStates = states
+            if (strengths.length() > 0) loraStrengths = strengths
+        }
+        val body = buildCustomBody(
+            clientId = jobClientId,
+            workflowId = id,
+            prompt = shownPrompt,
+            values = values,
+            batch = batchForJob,
+            seed = seed,
+            seedRandom = seedRandom,
+            outputNode = outputNode,
+            outputKind = outputKind,
+            workflowName = displayName.takeIf { it.isNotBlank() && it != id }
+                ?: c.workflowStore.labelOf(id).orEmpty(),
+            loraStates = loraStates,
+            loraStrengths = loraStrengths,
+        )
+        val hasImageSpec = specs.any { Specs.type(it) == "file:image" }
+        val hasVideoSpec = specs.any { Specs.type(it) == "file:video" }
+        if (hasVideoSpec) {
+            if (videoUri == null && videoPath == null) {
+                message = app.str(R.string.err_need_video)
+                return false
+            }
+            val staged = withContext(Dispatchers.IO) { stageVideo(app, jobClientId) } ?: return false
+            body.put("local_video", staged.absolutePath)
+        }
+        if (hasImageSpec) {
+            if (sourcePath == null && sourceUri == null) {
+                message = app.str(R.string.err_need_reference)
+                return false
+            }
+            val original = withContext(Dispatchers.IO) { stageOriginal(app, jobClientId) }
+            body.put("local_jpeg", original.absolutePath)
+            if (outputKind == "video" && sizesSelected.singleOrNull() == VIDEO_SIZE_SOURCE) {
+                val (w, h) = withContext(Dispatchers.IO) { decodeBounds(original) }
+                if (w >= 16 && h >= 16) {
+                    val sizeSpec = specs.firstOrNull { Specs.type(it) == "image_sizes" }
+                    if (sizeSpec != null) {
+                        body.optJSONObject("values")?.put(Specs.key(sizeSpec), JSONArray().put("${w}x${h}"))
+                    }
+                }
+            }
+        }
+        val now = System.currentTimeMillis()
+        withContext(Dispatchers.IO) {
+            c.db.insertJob(
+                JobRow(
+                    jobClientId,
+                    "",
+                    "custom",
+                    if (hasImageSpec || hasVideoSpec) "uploading" else "pending",
+                    body.toString(),
+                    now,
+                    now,
+                    sizeCount() * batchForJob,
+                    0,
+                    "",
+                ),
+            )
+        }
+        persistNow(boundId)
+        startGenerationService(app)
+        return true
     }
 
     /** spec 的 min/max 夹紧（没写不夹）。 */
@@ -1003,6 +1298,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
         gallery = loaded
         results = loaded.take(20)
+        mediaLoaded = true
         backfillSeed(loaded)
     }
 

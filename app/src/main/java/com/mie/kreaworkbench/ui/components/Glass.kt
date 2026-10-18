@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.blur.HazeBlurStyle
@@ -26,13 +27,19 @@ fun Modifier.hazeSourceIfEnabled(): Modifier {
 }
 
 @Composable
-fun Modifier.glass(fallback: Color, radius: androidx.compose.ui.unit.Dp = 16.dp, tint: Color? = null): Modifier {
+fun Modifier.glass(
+    fallback: Color,
+    radius: androidx.compose.ui.unit.Dp = 16.dp,
+    tint: Color? = null,
+    fade: HazeProgressive? = null,
+): Modifier {
     val state = LocalHazeState.current
     val enabled = LocalBlurEnabled.current && Build.VERSION.SDK_INT >= 31
     if (state == null || !enabled) return background(fallback)
     val style = HazeBlurStyle.Material3 {
         blurRadius(radius)
         if (tint != null) backgroundColor(tint)
+        if (fade != null) progressive(fade)
     }
     return hazeBlur(input = HazeInput.Backdrop(state), style = style)
 }

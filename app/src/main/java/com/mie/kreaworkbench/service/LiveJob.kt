@@ -31,6 +31,29 @@ data class LiveJob(
     val createdAt: Long = 0L,
 )
 
+/**
+ * 进度条数据（r21）：JobStatusCard 大卡与底栏细进度条（JobProgressSlim）共用同一条
+ * phase → 比例 的换算，避免两处复制 if/else 分支后走样。
+ */
+data class JobProgress(
+    /** 比例 0..1；-1 = 该阶段给不出确定比例（排队/提交中等）。 */
+    val bar: Float,
+    /** true = 在动但没确定比例（如下载中总字节未知），画不定动画。 */
+    val indeterminate: Boolean,
+)
+
+/** 单一进度换算：与 round20 之前 JobStatusCard 内联逻辑一致，仅是提取复用。 */
+fun LiveJob.jobProgress(): JobProgress {
+    val indeterminate = phase == "downloading" && bytesTotal <= 0L && bytesDone > 0L
+    val bar = when (phase) {
+        "running" -> if (stepMax > 0) step.toFloat() / stepMax else -1f
+        "downloading" -> if (bytesTotal > 0) (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f) else -1f
+        "uploading", "upload_ask" -> if (download >= 0f) download else -1f
+        else -> -1f
+    }
+    return JobProgress(bar = bar, indeterminate = indeterminate)
+}
+
 data class DoneEvent(
     val title: String,
     val text: String,
@@ -86,6 +109,23 @@ fun LiveJob.line(context: Context): String = when (phase) {
     "cancelled" -> context.str(R.string.phase_cancelled)
     "paused" -> context.str(R.string.paused_net)
     else -> context.str(R.string.phase_submitting)
+}
+
+/** 生成按钮主行。下载中写成「下载中 42% · 网速」，总大小未知时不写百分比。 */
+fun LiveJob.downloadCapsule(context: Context, queuedExtra: Int): String? {
+    if (phase != "downloading" || downloadFailed) return null
+    val speed = speedLabel(bytesPerSec)
+    val pct = when {
+        bytesTotal > 0L -> ((bytesDone.toDouble() * 100.0) / bytesTotal.toDouble()).toInt().coerceIn(0, 100)
+        download >= 0f -> (download * 100).toInt().coerceIn(0, 100)
+        else -> null
+    }
+    val base = if (pct != null) {
+        context.str(R.string.gen_capsule_download, pct, speed)
+    } else {
+        context.str(R.string.gen_capsule_download_speed, speed)
+    }
+    return if (queuedExtra > 0) base + " · " + context.str(R.string.queue_badge, queuedExtra) else base
 }
 
 private fun LiveJob.downloadDetail(): String {

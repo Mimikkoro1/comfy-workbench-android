@@ -1,7 +1,10 @@
 package com.mie.kreaworkbench.ui.components
 
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -9,12 +12,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,10 +28,8 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Maximize2
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,9 +42,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -50,8 +55,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
@@ -67,20 +72,32 @@ fun PromptField(
     minLines: Int = 5,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    FollowingTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
-        placeholder = placeholder,
-        minLines = minLines,
-        // 固定高度：行数封顶在 minLines，超出在框内滚动，不随打字撑高整页
-        maxLines = minLines,
-        trailing = {
-            IconButton(onClick = { expanded = true }) {
-                Icon(Lucide.Maximize2, stringResource(R.string.prompt_expand), tint = MaterialTheme.colorScheme.primary)
-            }
-        },
-    )
+    // r21：展开入口从「装饰盒内的 48dp 大 IconButton」改为「框内右上角一颗小图标」——
+    // 不再占横向空间、不把输入框撑高，多行时贴顶右，文本右侧留 34dp 避免遮字。
+    Box {
+        FollowingTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier.fillMaxWidth(),
+            placeholder = placeholder,
+            minLines = minLines,
+            // 固定高度：行数封顶在 minLines，超出在框内滚动，不随打字撑高整页
+            maxLines = minLines,
+            innerEndPadding = 34.dp,
+        )
+        Icon(
+            Lucide.Maximize2,
+            contentDescription = stringResource(R.string.prompt_expand),
+            tint = if (LocalGlassChrome.current) ImmersiveInk else MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 10.dp, end = 10.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .padding(8.dp)
+                .size(18.dp),
+        )
+    }
     if (expanded) {
         FullPromptDialog(
             value = value,
@@ -98,16 +115,15 @@ private fun FullPromptDialog(
     placeholder: String,
     onClose: () -> Unit,
 ) {
-    val scheme = MaterialTheme.colorScheme
     // 存入提示词库（round8 2.2）：所有 PromptField（text/prompt_pool，含负向词）共用本对话框。
-    // 弹层采用叠窗方案：FullPromptDialog 与 SaveToLibrarySheet 各自独立窗口，sheet 后开在上层，
-    // 保存后全屏编辑态原样保留（不清空、不改动输入内容）；备用降级=先关本 Dialog 再弹 sheet。
+    // r27：弹层改挂同窗口的 GlassHost 叠层，sheet 后开在上层，保存后全屏编辑态原样保留
+    // （不清空、不改动输入内容）；不再需要「独立窗口」那套降级。
     val app = LocalContext.current.applicationContext as KreaApp
     val libraries by app.container.library.libraries.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var showSaveSheet by remember { mutableStateOf(false) }
-    Dialog(
+    GlassDialog(
         onDismissRequest = onClose,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
@@ -115,43 +131,46 @@ private fun FullPromptDialog(
             dismissOnClickOutside = false,
         ),
     ) {
-        Surface(Modifier.fillMaxSize(), color = scheme.surface, contentColor = scheme.onSurface) {
+        // r27：全屏面板吃掉整屏，不露共享背景；底用 GlassPanelFallback（0.86 黑）保证长文本可读，
+        // 不走真模糊——整屏模糊既看不出背景也白费一次大图模糊。
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(GlassPanelFallback)
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.prompt_edit_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = ImmersiveInk,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { showSaveSheet = true }, enabled = value.isNotBlank()) {
+                    Text(stringResource(R.string.action_to_library))
+                }
+                // 走弹层自己的关闭流程（先锁输入法再收），别直接改状态把面板硬拆掉
+                val close = LocalGlassDismiss.current
+                TextButton(onClick = { close() }) { Text(stringResource(R.string.action_done)) }
+            }
+            val scroll = rememberScrollState()
             Column(
                 Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
+                    .weight(1f)
+                    .verticalScroll(scroll)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.prompt_edit_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = scheme.onSurface,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = { showSaveSheet = true }, enabled = value.isNotBlank()) {
-                        Text(stringResource(R.string.action_to_library))
-                    }
-                    TextButton(onClick = onClose) { Text(stringResource(R.string.action_done)) }
-                }
-                val scroll = rememberScrollState()
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .verticalScroll(scroll)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                ) {
-                    FollowingTextField(
-                        value = value,
-                        onValueChange = onValueChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = placeholder,
-                        minLines = 12,
-                        maxLines = Int.MAX_VALUE,
-                        requestFocus = true,
-                        // 全屏编辑没有固定高度，光标跟随靠祖先滚动
-                        followCursor = true,
-                    )
-                }
+                FollowingTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = placeholder,
+                    minLines = 12,
+                    maxLines = Int.MAX_VALUE,
+                    requestFocus = true,
+                    // 全屏编辑没有固定高度，光标跟随靠祖先滚动
+                    followCursor = true,
+                )
             }
         }
     }
@@ -170,7 +189,7 @@ private fun FullPromptDialog(
                 } catch (_: Exception) {
                     false
                 }
-                // 全屏 Dialog 是独立窗口，主窗口里的 sonner Toaster 会被盖住，用系统 Toast 保证可见
+                // 用系统 Toast：不依赖弹层窗口层级，键盘开着时也一定看得见（行为同 r26）
                 Toast.makeText(
                     context,
                     if (ok) context.str(R.string.saved_to_library) else context.str(R.string.err_save_to_library),
@@ -192,9 +211,11 @@ private fun FollowingTextField(
     maxLines: Int,
     requestFocus: Boolean = false,
     followCursor: Boolean = false,
-    trailing: (@Composable () -> Unit)? = null,
+    // r21：框内右上角叠展开小图标时给文本右侧留白，避免第一行正文被图标遮住
+    innerEndPadding: Dp = 0.dp,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val glass = LocalGlassChrome.current
     var tfv by remember { mutableStateOf(TextFieldValue(value, TextRange(0))) }
     LaunchedEffect(value) {
         if (value != tfv.text) {
@@ -215,17 +236,24 @@ private fun FollowingTextField(
     val imeBottom = WindowInsets.ime.getBottom(density)
     val focus = remember { FocusRequester() }
     val interaction = remember { MutableInteractionSource() }
-    val colors = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = scheme.onSurface,
-        unfocusedTextColor = scheme.onSurface,
-        focusedContainerColor = scheme.surfaceBright,
-        unfocusedContainerColor = scheme.surfaceBright,
-        cursorColor = scheme.primary,
-        focusedBorderColor = scheme.primary,
-        unfocusedBorderColor = scheme.outline,
-        focusedPlaceholderColor = scheme.onSurfaceVariant,
-        unfocusedPlaceholderColor = scheme.onSurfaceVariant,
-    )
+    val colors = if (glass) {
+        glassTextFieldColors()
+    } else {
+        OutlinedTextFieldDefaults.colors(
+            focusedTextColor = scheme.onSurface,
+            unfocusedTextColor = scheme.onSurface,
+            focusedContainerColor = scheme.surfaceBright,
+            unfocusedContainerColor = scheme.surfaceBright,
+            cursorColor = scheme.primary,
+            focusedBorderColor = scheme.primary,
+            unfocusedBorderColor = scheme.outline,
+            focusedPlaceholderColor = scheme.onSurfaceVariant,
+            unfocusedPlaceholderColor = scheme.onSurfaceVariant,
+        )
+    }
+    val ink = if (glass) ImmersiveInk else scheme.onSurface
+    val cursor = if (glass) Color.White else scheme.primary
+    val hint = if (glass) ImmersiveInkMuted else scheme.onSurfaceVariant
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
             try {
@@ -265,8 +293,8 @@ private fun FollowingTextField(
             .onFocusChanged { state ->
                 if (state.isFocused) scope.launch { requester.bringIntoView() }
             },
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = scheme.onSurface),
-        cursorBrush = SolidColor(scheme.primary),
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = ink),
+        cursorBrush = SolidColor(cursor),
         keyboardOptions = KeyboardOptions.Default,
         keyboardActions = KeyboardActions.Default,
         singleLine = false,
@@ -278,11 +306,12 @@ private fun FollowingTextField(
             OutlinedTextFieldDefaults.DecorationBox(
                 value = tfv.text,
                 visualTransformation = VisualTransformation.None,
-                innerTextField = inner,
-                placeholder = {
-                    Text(placeholder, color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                innerTextField = {
+                    Box(Modifier.padding(end = innerEndPadding)) { inner() }
                 },
-                trailingIcon = trailing,
+                placeholder = {
+                    Text(placeholder, color = hint, style = MaterialTheme.typography.bodyLarge)
+                },
                 singleLine = false,
                 enabled = true,
                 isError = false,

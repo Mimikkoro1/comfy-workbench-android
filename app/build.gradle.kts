@@ -20,8 +20,8 @@ android {
         applicationId = "com.mie.kreaworkbench.direct"
         minSdk = 26
         targetSdk = 37
-        versionCode = 62
-        versionName = "0.2.8"
+        versionCode = 88
+        versionName = "0.3.0"
     }
 
     signingConfigs {
@@ -72,6 +72,8 @@ android {
 }
 
 base {
+    // round19：与发布仓统一（发布仓一直是 comfy-workbench）。
+    // 这样两个仓库的构建产物同名，归档时不用再改名，也少一个"两仓不一致"的点。
     archivesName.set("comfy-workbench")
 }
 

@@ -3,12 +3,13 @@ package com.mie.kreaworkbench.ui.components
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +49,9 @@ fun TextResultActions(
     val libraries by app.container.library.libraries.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // r27：按钮压在玻璃卡/深色文本页上，统一白字 + 细白描边；布局与 r25 一致
+        val buttonColors = ButtonDefaults.outlinedButtonColors(contentColor = ImmersiveInk)
+        val buttonBorder = BorderStroke(1.dp, ImmersiveHairline)
         OutlinedButton(
             onClick = {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -55,6 +59,8 @@ fun TextResultActions(
                 notify(toaster, context, context.str(R.string.copied))
             },
             modifier = Modifier.weight(1f),
+            colors = buttonColors,
+            border = buttonBorder,
         ) {
             Icon(Lucide.ClipboardCopy, null, Modifier.size(16.dp))
             Text(stringResource(R.string.action_copy))
@@ -62,6 +68,8 @@ fun TextResultActions(
         OutlinedButton(
             onClick = { showSheet = true },
             modifier = Modifier.weight(1f),
+            colors = buttonColors,
+            border = buttonBorder,
         ) {
             Text(stringResource(R.string.action_to_library))
         }

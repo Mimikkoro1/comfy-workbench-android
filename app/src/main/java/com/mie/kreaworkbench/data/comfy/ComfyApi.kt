@@ -57,16 +57,25 @@ class ComfyApi(
 
     /** /queue 短缓存（round13 第 1 项）：多任务并发轮询在同一秒内共享一份队列快照。
      *  每个任务的 poll 每 1.5s 都要拉 /queue + n 个 /history，N 个任务并发时 /queue 请求量翻 N 倍，
-     *  外网高延迟下会把 Caddy/ComfyUI 拖慢、轮询被节流到异常退避，卡片状态长时间停在旧值。 */
-    @Volatile private var queueCache: Pair<Long, JSONObject>? = null
+     *  外网高延迟下会把 Caddy/ComfyUI 拖慢、轮询被节流到异常退避，卡片状态长时间停在旧值。
+     *  r22：POST /prompt、删队列、interrupt 会作废这份缓存。不作废的话，刚入队的 prompt
+     *  既不在旧快照里、history 也还没有，会被立刻判成「任务丢失」。 */
+    private val queueSnaps = QueueSnapshotCache(QUEUE_CACHE_MS)
+
+    /** prompt_id → 连续没在队列/历史里出现。宽限期过了才算丢失。 */
+    private val promptMisses = java.util.concurrent.ConcurrentHashMap<String, PromptMiss>()
 
     private suspend fun queueCached(): JSONObject {
-        queueCache?.let { (at, q) ->
-            if (System.currentTimeMillis() - at < QUEUE_CACHE_MS) return q
-        }
+        val now = System.currentTimeMillis()
+        queueSnaps.getIfFresh(now)?.let { return it }
+        val seen = queueSnaps.currentEpoch()
         val q = get("/queue")
-        queueCache = System.currentTimeMillis() to q
+        queueSnaps.store(seen, System.currentTimeMillis(), q)
         return q
+    }
+
+    private fun seenPrompt(pid: String) {
+        if (pid.isNotBlank()) promptMisses.remove(pid)
     }
 
     private suspend fun get(path: String, attempts: Int = 4, base: String? = null): JSONObject {
@@ -76,9 +85,15 @@ class ComfyApi(
 
     private suspend fun post(path: String, body: JSONObject, idempotent: Boolean): JSONObject {
         val base = settings.baseUrl()
-        return http.callJson({
+        // 改队列的请求：发出前先作废，回来再作废一次。
+        // 中间若有人正在拉 /queue，那份旧响应按代次对不上，不会写回缓存。
+        val touchesQueue = path == "/prompt" || path == "/interrupt" || path == "/queue"
+        if (touchesQueue) queueSnaps.invalidate()
+        val resp = http.callJson({
             Request.Builder().url(base + path).post(jsonBody(body)).build()
         }, idempotent)
+        if (touchesQueue) queueSnaps.invalidate()
+        return resp
     }
 
     suspend fun ping(base: String, user: String = "", pass: String = ""): PingResult {
@@ -371,18 +386,46 @@ class ComfyApi(
             val h = hists[i].optJSONObject(pid)
             if (h == null) {
                 when {
-                    pid in runningIds -> runningCount++
+                    pid in runningIds -> {
+                        seenPrompt(pid)
+                        runningCount++
+                    }
                     pendingIdx.containsKey(pid) -> {
+                        seenPrompt(pid)
                         val p = pendingIdx[pid]!!
                         if (minPending == null || p < minPending) minPending = p
                     }
                     else -> {
-                        failCount++
-                        if (firstError == null) firstError = ctx.str(R.string.err_job_lost)
+                        // 队列快照可能是旧的。WebSocket 已经有步数就仍当它在跑，别把进度盖成丢失。
+                        val known = progress.stepsFor(pid)
+                        if (known != null && (known.first > 0 || known.second > 0)) {
+                            seenPrompt(pid)
+                            runningCount++
+                            if (runningPid == null) {
+                                runningPid = pid
+                                runningIndex = index
+                            }
+                        } else {
+                            val nowMs = System.currentTimeMillis()
+                            if (promptMisses.size > 100) {
+                                val cutoff = nowMs - 60_000L
+                                promptMisses.entries.removeIf { it.value.firstAt < cutoff }
+                            }
+                            val miss = promptMisses.compute(pid) { _, old ->
+                                if (old == null) PromptMiss(nowMs, 1) else old.copy(count = old.count + 1)
+                            } ?: PromptMiss(nowMs, 1)
+                            if (PromptLostPolicy.isLost(miss.count, miss.firstAt, nowMs)) {
+                                promptMisses.remove(pid)
+                                failCount++
+                                if (firstError == null) firstError = ctx.str(R.string.err_job_lost)
+                            }
+                            // 宽限内：不当失败，轮询继续。state 落在下面的 queued/running。
+                        }
                     }
                 }
                 continue
             }
+            seenPrompt(pid)
             val status = h.optJSONObject("status") ?: JSONObject()
             when {
                 status.optString("status_str") == "error" -> {

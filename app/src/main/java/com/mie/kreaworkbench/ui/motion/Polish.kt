@@ -4,15 +4,10 @@ import android.content.Context
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
@@ -24,21 +19,16 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
-import androidx.compose.animation.core.animateFloat
 import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import coil.size.Size
 import com.mie.kreaworkbench.service.LiveJob
 import java.io.File
-import kotlin.math.tan
 
 val LocalSharedScope = staticCompositionLocalOf<SharedTransitionScope?> { null }
 val LocalAnimScope = staticCompositionLocalOf<AnimatedVisibilityScope?> { null }
@@ -103,10 +93,10 @@ fun Modifier.sharedImage(key: Any?, viewer: Boolean = false): Modifier {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun Modifier.pressScale(interaction: MutableInteractionSource): Modifier {
+fun Modifier.pressScale(interaction: MutableInteractionSource, pressedScale: Float = 0.97f): Modifier {
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
+        targetValue = if (pressed) pressedScale else 1f,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>(),
         label = "press-scale",
     )
@@ -114,26 +104,6 @@ fun Modifier.pressScale(interaction: MutableInteractionSource): Modifier {
         scaleX = scale
         scaleY = scale
     }
-}
-
-@Composable
-fun ShimmerBox(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val shift by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(durationMillis = 1200, easing = LinearEasing)),
-        label = "shimmer-shift",
-    )
-    val base = MaterialTheme.colorScheme.surfaceContainerHigh
-    val highlight = MaterialTheme.colorScheme.surfaceBright
-    val angle = tan(Math.toRadians(20.0)).toFloat()
-    val brush = Brush.linearGradient(
-        colors = listOf(base, highlight, base),
-        start = Offset(shift * 800f - 400f, 0f),
-        end = Offset(shift * 800f, 800f * angle),
-    )
-    Box(modifier.clip(RoundedCornerShape(16.dp)).background(brush))
 }
 
 @Composable

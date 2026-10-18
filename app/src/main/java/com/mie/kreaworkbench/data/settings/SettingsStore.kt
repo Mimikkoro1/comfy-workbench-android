@@ -1,6 +1,7 @@
 package com.mie.kreaworkbench.data.settings
 
 import android.content.Context
+import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -18,11 +19,12 @@ import org.json.JSONObject
 
 private val Context.dataStore by preferencesDataStore("krea_settings")
 
-/** 服务器地址历史条目：地址 + 各自的账号密码（密码密文，只在 UI 填表单时解出来用）。 */
+/** 服务器配置条目：地址 + 可选显示名 + 各自的账号密码。密码落盘时由 ServerCrypto 加密，读回时解密。 */
 data class ServerHistoryEntry(
     val url: String,
     val user: String,
     val pass: String,
+    val name: String = "",
 )
 
 data class UserSettings(
@@ -31,7 +33,7 @@ data class UserSettings(
     /** Basic Auth 凭据（可空）。有值时所有请求/WS/图片加载都带头；加密落盘。 */
     val serverUser: String = "",
     val serverPass: String = "",
-    /** 最近用过的地址（最多 5 条，各带自己的凭据），按 url 去重。 */
+    /** 已保存的服务器配置列表（每套带自己的显示名与凭据），按 url 去重；当前连接仍看 serverUrl。 */
     val serverHistory: List<ServerHistoryEntry> = emptyList(),
     val themeMode: String = "system",
     val notifyEnabled: Boolean = true,
@@ -63,6 +65,18 @@ data class UserSettings(
     val currentWorkflow: String = "",
     /** vivo 忽略电池优化的一次性引导只弹一次。 */
     val batteryHintShown: Boolean = false,
+    /** 高级抽卡。关掉时生成页仍是本地库抽卡。 */
+    val advGacha: Boolean = false,
+    val advGachaUrl: String = DEFAULT_ADV_GACHA_URL,
+    val advGachaHidePrompt: Boolean = false,
+    val advGachaMode: String = "wallpaper",
+    val advGachaMaster: String = "",
+    val advGachaOutfit: String = "random",
+    val advGachaPool: String = "auto",
+    val advGachaCategory: String = "",
+    val advGachaHistory: List<String> = emptyList(),
+    /** 高级抽卡引导点过「不再提示」。 */
+    val advGachaGuideOff: Boolean = false,
 )
 
 class SettingsStore(private val context: Context) {
@@ -100,6 +114,16 @@ class SettingsStore(private val context: Context) {
     private val kBlur = booleanPreferencesKey("blur")
     private val kWorkflow = stringPreferencesKey("current_workflow")
     private val kBatteryHint = booleanPreferencesKey("battery_hint")
+    private val kAdv = booleanPreferencesKey("adv_gacha")
+    private val kAdvUrl = stringPreferencesKey("adv_gacha_url")
+    private val kAdvHide = booleanPreferencesKey("adv_gacha_hide_prompt")
+    private val kAdvMode = stringPreferencesKey("adv_gacha_mode")
+    private val kAdvMaster = stringPreferencesKey("adv_gacha_master")
+    private val kAdvOutfit = stringPreferencesKey("adv_gacha_outfit")
+    private val kAdvPool = stringPreferencesKey("adv_gacha_pool")
+    private val kAdvCategory = stringPreferencesKey("adv_gacha_category")
+    private val kAdvHist = stringPreferencesKey("adv_gacha_history")
+    private val kAdvGuideOff = booleanPreferencesKey("adv_gacha_guide_off")
     // round14 更新检查：上次自动检查时间 + 用户忽略的 tag（不进 UserSettings，单独读写）
     private val kUpdateLast = longPreferencesKey("update_last_check")
     private val kUpdateIgnored = stringPreferencesKey("update_ignored_tag")
@@ -146,6 +170,16 @@ class SettingsStore(private val context: Context) {
             blurEnabled = p[kBlur] ?: true,
             currentWorkflow = p[kWorkflow] ?: "",
             batteryHintShown = p[kBatteryHint] ?: false,
+            advGacha = p[kAdv] ?: false,
+            advGachaUrl = p[kAdvUrl] ?: DEFAULT_ADV_GACHA_URL,
+            advGachaHidePrompt = p[kAdvHide] ?: false,
+            advGachaMode = p[kAdvMode] ?: "wallpaper",
+            advGachaMaster = p[kAdvMaster] ?: "",
+            advGachaOutfit = p[kAdvOutfit] ?: "random",
+            advGachaPool = p[kAdvPool] ?: "auto",
+            advGachaCategory = p[kAdvCategory] ?: "",
+            advGachaHistory = parseUrlList(p[kAdvHist].orEmpty()),
+            advGachaGuideOff = p[kAdvGuideOff] ?: false,
         )
     }
 
@@ -204,14 +238,48 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    /** 测试连接成功后记录「最近用过的地址」：按 url 去重置顶，最多 5 条。 */
+    /** 测试连接成功后自动记录：按 url 去重置顶，最多 HISTORY_MAX 条；空显示名/空凭据保留旧值，避免冲掉已保存配置。 */
     suspend fun rememberServer(url: String, user: String, pass: String) = gate.withLock {
         val clean = url.trim().trimEnd('/')
         if (clean.isBlank()) return@withLock
+        upsertServerLocked(ServerHistoryEntry(url = clean, user = user.trim(), pass = pass), preserveOnBlank = true)
+    }
+
+    /** 显式保存 / 更新一套服务器配置（可带显示名与凭据）；同 url 覆盖凭据，空显示名回落到旧名。 */
+    suspend fun saveServer(entry: ServerHistoryEntry) = gate.withLock {
+        val clean = entry.url.trim().trimEnd('/')
+        if (clean.isBlank()) return@withLock
+        upsertServerLocked(entry.copy(url = clean, user = entry.user.trim()), preserveOnBlank = false)
+    }
+
+    /** 从配置列表删除一套；只动列表，不动当前连接的地址与凭据。 */
+    suspend fun deleteServer(url: String) = gate.withLock {
+        val clean = url.trim().trimEnd('/')
+        if (clean.isBlank()) return@withLock
+        val list = parseHistory(context.dataStore.data.first()[kHistory].orEmpty())
+            .filter { it.url != clean }
+        context.dataStore.edit { it[kHistory] = historyToJson(list) }
+    }
+
+    /** 在持锁前提下 upsert 一条配置到列表首位；同 url 合并凭据。preserveOnBlank 用于自动记录（空值不覆盖旧值）。 */
+    private suspend fun upsertServerLocked(newEntry: ServerHistoryEntry, preserveOnBlank: Boolean) {
+        val existing = parseHistory(context.dataStore.data.first()[kHistory].orEmpty())
+        val idx = existing.indexOfFirst { it.url == newEntry.url }
+        val merged = if (idx >= 0) {
+            val old = existing[idx]
+            ServerHistoryEntry(
+                url = newEntry.url,
+                user = if (preserveOnBlank && newEntry.user.isBlank()) old.user else newEntry.user,
+                pass = if (preserveOnBlank && newEntry.pass.isBlank()) old.pass else newEntry.pass,
+                name = newEntry.name.ifBlank { old.name },
+            )
+        } else {
+            newEntry
+        }
         val list = ArrayList<ServerHistoryEntry>()
-        list.add(ServerHistoryEntry(clean, user.trim(), pass))
-        parseHistory(context.dataStore.data.first()[kHistory].orEmpty()).forEach { old ->
-            if (old.url != clean && list.size < 5) list.add(old)
+        list.add(merged)
+        for (old in existing) {
+            if (old.url != merged.url && list.size < HISTORY_MAX) list.add(old)
         }
         context.dataStore.edit { it[kHistory] = historyToJson(list) }
     }
@@ -250,11 +318,39 @@ class SettingsStore(private val context: Context) {
             p[kBlur] = next.blurEnabled
             p[kWorkflow] = next.currentWorkflow
             p[kBatteryHint] = next.batteryHintShown
+            p[kAdv] = next.advGacha
+            p[kAdvUrl] = next.advGachaUrl
+            p[kAdvHide] = next.advGachaHidePrompt
+            p[kAdvMode] = next.advGachaMode
+            p[kAdvMaster] = next.advGachaMaster
+            p[kAdvOutfit] = next.advGachaOutfit
+            p[kAdvPool] = next.advGachaPool
+            p[kAdvCategory] = next.advGachaCategory
+            p[kAdvHist] = urlListJson(next.advGachaHistory)
+            p[kAdvGuideOff] = next.advGachaGuideOff
         }
     }
 
+    private fun parseUrlList(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optString(i).trim().trimEnd('/').ifBlank { null }
+            }.distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun urlListJson(list: List<String>): String {
+        val arr = JSONArray()
+        for (url in list.take(8)) arr.put(url)
+        return arr.toString()
+    }
+
     companion object {
-        const val HISTORY_MAX = 5
+        const val HISTORY_MAX = 20
 
         fun parseHistory(raw: String): List<ServerHistoryEntry> {
             if (raw.isBlank()) return emptyList()
@@ -264,7 +360,12 @@ class SettingsStore(private val context: Context) {
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
                     val url = o.optString("url").trim()
                     if (url.isBlank()) return@mapNotNull null
-                    ServerHistoryEntry(url, o.optString("user"), ServerCrypto.decrypt(o.optString("pass")))
+                    ServerHistoryEntry(
+                        url = url,
+                        user = o.optString("user"),
+                        pass = ServerCrypto.decrypt(o.optString("pass")),
+                        name = o.optString("name"),
+                    )
                 }
             } catch (_: Exception) {
                 emptyList()
@@ -278,7 +379,8 @@ class SettingsStore(private val context: Context) {
                     JSONObject()
                         .put("url", e.url)
                         .put("user", e.user)
-                        .put("pass", ServerCrypto.encrypt(e.pass)),
+                        .put("pass", ServerCrypto.encrypt(e.pass))
+                        .put("name", e.name),
                 )
             }
             return arr.toString()
