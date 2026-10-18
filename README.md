@@ -61,10 +61,10 @@
 
 > Android 8.0 及以上。Release APK 为 arm64-v8a / armeabi-v7a / x86 / x86_64 通用包。
 
-1. 准备一台跑着 ComfyUI 的机器（PC / 服务器均可）
-2. **局域网直连（默认、最简单）**：手机和电脑连同一个 Wi-Fi，填电脑的局域网 IP 就能直连，例如 `http://192.168.1.100:8188`。远程那些是出门用的，不是必须。
-3. 从 Releases 安装 APK，填地址
-4. 在「工作流/库」导入一条 **API 格式** 工作流（在 ComfyUI 网页端用「Export (API)」导出），开始生成
+1. 电脑上启动 ComfyUI 时加 `--listen 0.0.0.0`（只听 127.0.0.1 的话手机连不上），防火墙放行 8188
+2. **同一个 Wi-Fi 直接就能连**：手机和电脑连同一个 Wi-Fi，App 里填 `http://<电脑局域网IP>:8188`（Windows 用 `ipconfig` 看 IPv4，例如 `http://192.168.1.100:8188`）。不用装蒲公英，也不用折腾 IPv6 / DDNS，下面的「远程访问」是出门在外才用的
+3. 从 Releases 安装 APK，填地址，连上就能用
+4. 在「工作流/库」导入一条 **API 格式** 工作流：ComfyUI 网页端菜单「工作流」（新版叫「文件」）→「导出 (API)」。普通保存的界面格式导入时会被拦下，并提示改用「导出 (API)」
 
 ## 远程访问
 
@@ -83,7 +83,7 @@
 
 ## 自定义工作流
 
-在 ComfyUI 网页端用「Export (API)」导出 JSON（不是默认的界面格式），再到应用里导入。导入失败时会提示「这是界面格式，请用 Export (API)」。`docs/example-workflows/` 里有四条能直接对一下格式的例子：
+在 ComfyUI 网页端用「导出 (API)」/ Export (API) 导出 JSON（不是普通保存的界面格式），再到应用里导入。导入普通保存的界面格式时，App 会拦下并提示改用「导出 (API)」。`docs/example-workflows/` 里有四条能直接对一下格式的例子：
 
 - `kr2turbo_t2i.workflow.json` — 文生图（Krea 2 Turbo）
 - `kr2turbo_i2i.workflow.json` — 图生图
@@ -159,11 +159,19 @@ gradlew.bat assembleRelease
 
 It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay on the computer. The phone only runs them.
 
+**Quick start (same Wi-Fi, nothing else to install)**
+
+1. Start ComfyUI with `--listen 0.0.0.0` (if it only listens on 127.0.0.1 the phone can't reach it) and allow port 8188 through the firewall
+2. Put the phone on the same Wi-Fi, install the APK from Releases, and enter `http://<PC LAN IP>:8188` (find the IPv4 with `ipconfig`, e.g. `http://192.168.1.100:8188`)
+3. Import an **API-format** workflow: in the ComfyUI web UI, Workflow menu (File in newer versions) → Export (API). A regular saved workflow is rejected with a hint to re-export
+
+Remote access (Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from home.
+
 **New in v0.3.0**
 
 - Frosted-glass immersive UI: your latest image fills the background, and every screen uses glass cards. Bottom sheets slide in and out and follow your finger; dialogs fade. Falls back to translucent panels below Android 12 or with blur turned off
 - Several saved ComfyUI servers, each with its own name and login, switched from the address dropdown
-- Reliable cancel: percentage progress on the Generate button, tap for the queue, long-press to cancel the current job. An unreachable server fails right away instead of spinning forever; switching servers ends the old jobs; Settings → Connection has "Force-end all tasks". Jobs already submitted still come back on a flaky network
+- Reliable cancel: percentage progress on the Generate button, tap for the queue, long-press to cancel the current job. An unreachable server fails right away instead of spinning forever; switching servers ends the old jobs; Settings → Connection has "Force-cancel all tasks". Jobs already submitted still come back on a flaky network
 - Text-only workflows such as prompt captioning show their result on the Generate screen, with copy and save-to-library
 - Regenerate from the viewer (same prompt, random seed); save an image's prompt to a library in one tap
 - Optional advanced gacha via [gacha-server-lite](https://github.com/Mimikkoro1/gacha-server-lite): the server sends the filter options, and dimensions it doesn't have are hidden
@@ -186,7 +194,7 @@ It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay
 
 Examples: `docs/example-workflows/` (Krea 2 Turbo t2i / i2i, Wan2.2 i2v, Florence-2 caption). Model files named in those workflows must exist on your ComfyUI machine.
 
-Remote access: on mainland China, Oray Pgyer (蒲公英) is the simplest mesh. Public IPv6 + DDNS with a Caddy / Nginx reverse proxy and Basic Auth also works; open only the proxy port, never 8188 itself. Tailscale is fine outside China and can be unstable on the mainland. Plain HTTP on an untrusted network should go through a tunnel.
+Remote access (optional, only away from home): on mainland China, Oray Pgyer (蒲公英) is the simplest mesh. Public IPv6 + DDNS with a Caddy / Nginx reverse proxy and Basic Auth also works; open only the proxy port, never 8188 itself. Tailscale is fine outside China and can be unstable on the mainland. Plain HTTP on an untrusted network should go through a tunnel.
 
 **Advanced gacha server.** Clone [gacha-server-lite](https://github.com/Mimikkoro1/gacha-server-lite) (`git clone https://github.com/Mimikkoro1/gacha-server-lite.git`), install Python 3.10+, and double-click `start.bat` (`./start.sh` on Linux / macOS). The first run creates `.venv` and installs the dependencies; the default port is 8787. In the app, turn on advanced gacha and enter `http://<PC LAN IP>:8787` as the gacha service address under Settings → Connection. Phone and PC must be on the same LAN. The server has no authentication, so don't expose it to the internet. Text-to-image workflows only.
 
