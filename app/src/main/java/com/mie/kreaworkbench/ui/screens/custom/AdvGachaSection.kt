@@ -406,11 +406,11 @@ private fun gachaView(vm: CustomModel, settings: UserSettings): GachaView {
     )
 }
 
-/** 英文界面优先用服端 label_en；中文界面用 label；都空再退回 id。传参照旧只用 id。 */
+/** 非中文界面优先用服端 label_en（英文、日语等都能看到英文名）；中文界面用 label；都空再退回 id。传参照旧只用 id。 */
 @Composable
 private fun optionText(option: GachaOption): String {
     val locales = LocalConfiguration.current.locales
-    val english = locales.isEmpty || locales[0].language == "en"
+    val english = locales.isEmpty || locales[0].language != "zh"
     val text = if (english) option.labelEn.ifBlank { option.label } else option.label
     return text.ifBlank { option.id }
 }

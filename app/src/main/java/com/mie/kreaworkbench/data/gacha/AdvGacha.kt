@@ -13,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
-/** 电脑上文字抽卡页的默认地址（工作仓自用，和 Comfy 默认内网地址同一类）。 */
+/** 电脑上文字抽卡页的默认地址（示例地址，和 Comfy 默认内网地址同一类）。 */
 const val DEFAULT_ADV_GACHA_URL = "http://192.168.1.100:8787"
 
 /** 抽卡服务仓库。空着时引导框不显示链接。 */

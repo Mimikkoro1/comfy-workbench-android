@@ -468,7 +468,7 @@
     <string name="gacha_outfit">服装</string>
     <string name="gacha_outfit_random">随机</string>
     <string name="gacha_outfit_signature">招牌</string>
-    <string name="gacha_outfit_char">角色</string>
+    <string name="gacha_outfit_char">角色互换</string>
     <string name="gacha_pool">服装池</string>
     <string name="gacha_pool_auto">自动</string>
     <string name="gacha_pool_casual">日常</string>
@@ -476,11 +476,11 @@
     <string name="gacha_pool_gongsu">攻速</string>
     <string name="gacha_pose">姿势</string>
     <string name="gacha_pose_any">不限</string>
-    <string name="gacha_pose_standing">站</string>
-    <string name="gacha_pose_sitting">坐</string>
+    <string name="gacha_pose_standing">站立</string>
+    <string name="gacha_pose_sitting">坐姿</string>
     <string name="gacha_pose_kneeling">跪姿</string>
-    <string name="gacha_pose_squatting">蹲</string>
-    <string name="gacha_pose_lying">躺</string>
+    <string name="gacha_pose_squatting">蹲姿</string>
+    <string name="gacha_pose_lying">躺姿</string>
     <string name="gacha_pose_all_fours">伏身</string>
     <string name="gacha_pose_split">伸展</string>
     <string name="gacha_pose_suspended">悬空</string>
