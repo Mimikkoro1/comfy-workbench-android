@@ -62,11 +62,13 @@
 > Android 8.0 及以上。Release APK 为 arm64-v8a / armeabi-v7a / x86 / x86_64 通用包。
 
 1. 准备一台跑着 ComfyUI 的机器（PC / 服务器均可）
-2. 手机和它在同一网络，或按下面的方式远程打通
-3. 从 Releases 安装 APK，填 ComfyUI 地址，例如 `http://192.168.1.100:8188`
-4. 在「工作流/库」导入一条 API 格式工作流，开始生成
+2. **局域网直连（默认、最简单）**：手机和电脑连同一个 Wi-Fi，填电脑的局域网 IP 就能直连，例如 `http://192.168.1.100:8188`。远程那些是出门用的，不是必须。
+3. 从 Releases 安装 APK，填地址
+4. 在「工作流/库」导入一条 **API 格式** 工作流（在 ComfyUI 网页端用「Export (API)」导出），开始生成
 
 ## 远程访问
+
+人不在家时才需要看这一节。局域网直接填 IP 即可。
 
 默认面向局域网，通信是 HTTP 明文。人不在家时，选一种方式把家里的 ComfyUI 露给手机：
 
@@ -81,7 +83,7 @@
 
 ## 自定义工作流
 
-在 ComfyUI 网页端导出 **API 格式** JSON，在应用里导入。`docs/example-workflows/` 里有四条能直接对一下格式的例子：
+在 ComfyUI 网页端用「Export (API)」导出 JSON（不是默认的界面格式），再到应用里导入。导入失败时会提示「这是界面格式，请用 Export (API)」。`docs/example-workflows/` 里有四条能直接对一下格式的例子：
 
 - `kr2turbo_t2i.workflow.json` — 文生图（Krea 2 Turbo）
 - `kr2turbo_i2i.workflow.json` — 图生图
