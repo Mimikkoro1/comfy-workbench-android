@@ -137,6 +137,8 @@ fun AdvGachaGuideDialog(onConfirm: () -> Unit, onNever: () -> Unit, onCancel: ()
 /** 底栏那一行：只拼当前真画出来的维。某维被服端留空时，别留一段陈旧文案。服装池不进这行。 */
 @Composable
 fun advGachaSummary(vm: CustomModel, settings: UserSettings): String {
+    // r39：设置没从磁盘加载完不显示假默认
+    if (!vm.settingsLoaded) return stringResource(R.string.gacha_masters_loading)
     val view = gachaView(vm, settings)
     val parts = ArrayList<String>(4)
     if (view.modes.isNotEmpty()) parts.add(optionLabel(view.modes, view.mode, modeLabel(view.mode)))
@@ -154,6 +156,15 @@ fun advGachaSummary(vm: CustomModel, settings: UserSettings): String {
 @Composable
 fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings) {
     val scheme = MaterialTheme.colorScheme
+    // r39：设置没从磁盘加载完不渲染默认值、不可点（防止以假默认为基准写全量）
+    if (!vm.settingsLoaded) {
+        Text(
+            stringResource(R.string.gacha_masters_loading),
+            fontSize = 11.sp,
+            color = scheme.onSurfaceVariant,
+        )
+        return
+    }
     val view = gachaView(vm, settings)
     val modeLabelText = stringResource(R.string.gacha_mode)
     val masterLabelText = stringResource(R.string.gacha_master)
@@ -181,7 +192,8 @@ fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings) {
     }
     if (!vm.gachaMastersLoaded) {
         Text(stringResource(R.string.gacha_masters_loading), fontSize = 11.sp, color = scheme.onSurfaceVariant)
-    } else if (vm.gachaMastersError.isNotBlank() && vm.gachaMasters.isEmpty()) {
+    } else if (vm.gachaMastersError.isNotBlank()) {
+        // r39：保留旧目录的失败也要让用户看到错误（不再只在空目录时显示）
         Text(vm.gachaMastersError, fontSize = 11.sp, color = scheme.error)
     }
     if (view.outfits.isNotEmpty() || view.poses.isNotEmpty()) {

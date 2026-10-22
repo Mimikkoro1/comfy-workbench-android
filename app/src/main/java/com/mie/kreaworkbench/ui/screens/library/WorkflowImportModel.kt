@@ -9,6 +9,7 @@ import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.data.comfy.NodeLookup
+import com.mie.kreaworkbench.data.workflows.BuiltinTemplates
 import com.mie.kreaworkbench.data.workflows.Candidate
 import com.mie.kreaworkbench.data.workflows.FileKind
 import com.mie.kreaworkbench.data.workflows.Specs
@@ -17,6 +18,7 @@ import com.mie.kreaworkbench.data.workflows.classifyFile
 import com.mie.kreaworkbench.data.workflows.imageSaverNodes
 import com.mie.kreaworkbench.data.workflows.inferOutputKind
 import com.mie.kreaworkbench.data.workflows.inferSpecs
+import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.data.workflows.textOutputNodes
 import com.mie.kreaworkbench.data.workflows.upgradeCombos
 import com.mie.kreaworkbench.data.workflows.validateDefinition
@@ -52,11 +54,26 @@ data class WfItem(
         }
 }
 
+/** r38 E4/E5：配置页的数据来源——文件导入（原路 B）或库内已存工作流（复制并自定义 / 编辑参数）。 */
+sealed interface Source {
+    data class Uris(val uris: List<Uri>) : Source
+
+    /** [mode]："copy" = 复制并自定义（保存成新工作流）；"edit" = 编辑参数（覆盖原工作流的 definition）。 */
+    data class Stored(val id: String, val mode: String) : Source
+
+    companion object {
+        const val MODE_COPY = "copy"
+        const val MODE_EDIT = "edit"
+    }
+}
+
 /**
  * 路 B 配置页状态：读文件 → inferSpecs → 用户勾选/改名/排序/选 tier → 保存。
  * 保存时 default 已是工作流当前值（infer 时写入），去掉 runtime 字段生成 PC 同格式定义。
+ * r38 E4/E5：构造参数从 uri 列表改为 [Source]，Stored 模式从库内工作流加载（用现有 definition
+ * 预填勾选/名称/顺序），copy 保存成新工作流、edit 覆盖原 definition；页面 UI 不变。
  */
-class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
+class WorkflowImportModel(app: Application, private val source: Source) {
     private val c = (app as KreaApp).container
     private val appContext: Application = app
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -97,7 +114,10 @@ class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
     init {
         scope.launch {
             try {
-                load()
+                when (val src = source) {
+                    is Source.Uris -> loadFromUris(src.uris)
+                    is Source.Stored -> loadStored(src)
+                }
             } catch (e: Exception) {
                 loadError = e.message ?: e.javaClass.simpleName
             } finally {
@@ -107,7 +127,7 @@ class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
         }
     }
 
-    private suspend fun load() {
+    private suspend fun loadFromUris(uris: List<Uri>) {
         val parsed = withContext(Dispatchers.IO) {
             uris.mapNotNull { uri ->
                 val name = queryDisplayName(appContext, uri)
@@ -138,6 +158,98 @@ class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
         statusText = appContext.str(R.string.checking_nodes)
         val upgraded = upgradeCombos(candidates, comboInfo(candidates))
         items = upgraded.map { cand -> cand.toItem() }
+    }
+
+    /**
+     * r38 E4/E5：从库内已存工作流加载：workflow.json 走导入同一条推断链拿候选，
+     * 再用现有 definition 预填——在 definition 里的项勾选、按 definition 顺序排前，
+     * label/tier 取 definition 值；definition 有但推断不出的（PC 成对导入/手写定义）原样保留，
+     * 不丢；其余候选不勾选排后。
+     */
+    private suspend fun loadStored(src: Source.Stored) {
+        val id = src.id
+        val (wf, def) = c.workflowStore.get(id)
+            ?: throw IllegalStateException(appContext.str(R.string.err_workflow_deleted))
+        workflowJson = wf
+        // 源文件名取 definition 的 workflow_file，没有就用 id
+        workflowFileName = def.optString("workflow_file").ifBlank { id }
+
+        val meta = c.workflowStore.metaOf(id)
+        val storedName = def.optString("display_name").ifBlank { meta?.displayName ?: id }
+        displayName = when (src.mode) {
+            // copy：副本名用当前语言的内置名拼后缀（与 WorkflowStore.copy 同款），落盘后固定
+            Source.MODE_COPY -> {
+                val base = if (meta?.source == BuiltinTemplates.SOURCE) {
+                    BuiltinTemplates.nameResOf(id)?.let { appContext.str(it) } ?: storedName
+                } else {
+                    storedName
+                }
+                appContext.str(R.string.copy_name_suffix, base)
+            }
+            else -> storedName
+        }
+
+        // 出图节点/输出类型：优先取 definition 已有值，缺了再走推断
+        val savers = imageSaverNodes(wf)
+        outputNodeChoices = savers
+        outputKindInferred = inferOutputKind(wf)
+        outputKind = outputKindOf(def)
+        if (outputKind == "text") {
+            outputNode = def.optString("kwb_output_node").ifBlank { textOutputNodes(wf).firstOrNull() ?: "" }
+        } else if (outputKind == "video") {
+            outputNode = def.optString("kwb_output_node").ifBlank { videoOutputNodes(wf).firstOrNull() ?: "" }
+        } else {
+            outputNode = def.optString("kwb_output_node").ifBlank { savers.firstOrNull() ?: "" }
+        }
+
+        // 候选：与导入同一条链（组合升级，含节点探测）
+        val candidates = inferSpecs(wf)
+        statusText = appContext.str(R.string.checking_nodes)
+        val upgraded = upgradeCombos(candidates, comboInfo(candidates))
+
+        // 现有 definition 按 key（node_id|field）对齐预填
+        val defByKey = LinkedHashMap<String, JSONObject>()
+        val defSpecs = def.optJSONArray("user_facing_inputs")
+        if (defSpecs != null) {
+            for (i in 0 until defSpecs.length()) {
+                val s = defSpecs.optJSONObject(i) ?: continue
+                val k = Specs.key(s)
+                if (k.isNotBlank() && !defByKey.containsKey(k)) defByKey[k] = s
+            }
+        }
+        val candByKey = HashMap<String, Candidate>()
+        for (cand in upgraded) {
+            val k = Specs.key(cand.spec)
+            if (k.isNotBlank() && !candByKey.containsKey(k)) candByKey[k] = cand
+        }
+        val merged = ArrayList<WfItem>()
+        val usedKeys = HashSet<String>()
+        // ① definition 顺序在前：推断能对上的用推断 spec（含当前值）+ definition 的 label/tier，勾选
+        for ((k, defSpec) in defByKey) {
+            val cand = candByKey[k]
+            if (cand != null) {
+                val spec = JSONObject(cand.spec.toString())
+                if (defSpec.optString("label").isNotBlank()) spec.put("label", defSpec.optString("label"))
+                if (defSpec.optString("tier").isNotBlank()) spec.put("tier", defSpec.optString("tier"))
+                spec.put("enabled", true)
+                merged.add(cand.copy(spec = spec).toItem())
+            } else {
+                // ② 推断不出的 definition 项：原样保留，勾选，不丢
+                val spec = JSONObject(defSpec.toString())
+                spec.put("enabled", true)
+                merged.add(Candidate(spec, spec.optString("node_title")).toItem())
+            }
+            usedKeys.add(k)
+        }
+        // ③ 不在 definition 里的候选：不勾选，排后
+        for (cand in upgraded) {
+            val k = Specs.key(cand.spec)
+            if (k in usedKeys) continue
+            val spec = JSONObject(cand.spec.toString())
+            spec.put("enabled", false)
+            merged.add(Candidate(spec, cand.nodeName).toItem())
+        }
+        items = merged
     }
 
     /** 本次导入内按 class 取节点定义。失败后本趟不再发后续请求。 */
@@ -233,7 +345,8 @@ class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
         items = list
     }
 
-    /** 保存：本地校验 → 可选 /object_info 缺节点提醒（只提醒不拦）→ 落盘。 */
+    /** 保存：本地校验 → 可选 /object_info 缺节点提醒（只提醒不拦）→ 落盘。
+     *  r38 E4：Stored copy 模式与文件导入同路——import 成新 UUID 普通工作流，可改名/可删/可再编辑；原工作流不动。 */
     fun save() {
         val wf = workflowJson ?: return
         if (saving) return
@@ -304,7 +417,13 @@ class WorkflowImportModel(app: Application, private val uris: List<Uri>) {
     }
 
     private suspend fun doSave(def: JSONObject, wf: JSONObject) {
-        c.workflowStore.import(wf, def, source = "api", displayName = def.optString("display_name"))
+        // r38 E4/E5：copy / 文件导入 → import 成新工作流；edit → 只覆盖原工作流的 definition。
+        val stored = source as? Source.Stored
+        if (stored != null && stored.mode == Source.MODE_EDIT) {
+            c.workflowStore.updateDefinition(stored.id, def)
+        } else {
+            c.workflowStore.import(wf, def, source = "api", displayName = def.optString("display_name"))
+        }
         saved = true
     }
 }

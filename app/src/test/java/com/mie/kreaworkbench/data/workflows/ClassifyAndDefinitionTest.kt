@@ -28,6 +28,35 @@ class ClassifyAndDefinitionTest {
         assertEquals("定义", FileKind.DEFINITION, classifyFile("a.json", """{"user_facing_inputs":[]}""").first)
     }
 
+    @Test
+    fun classifyUiWorkflowWithoutLinks() {
+        // 旧判定只认 nodes+links；有些插件/裁剪过的界面格式没有 links，只有 last_node_id
+        assertEquals(
+            "只有 last_node_id 的界面格式",
+            FileKind.UI_WORKFLOW,
+            classifyFile("a.json", """{"last_node_id":3,"nodes":[]}""").first,
+        )
+        // nodes 不是数组时不判成界面格式（这里落到 UNKNOWN）
+        assertEquals(
+            "nodes 不是数组",
+            FileKind.UNKNOWN,
+            classifyFile("a.json", """{"nodes":{"a":1},"links":[]}""").first,
+        )
+        // API 格式不被新判定误伤
+        assertEquals(
+            "API 格式",
+            FileKind.API_WORKFLOW,
+            classifyFile("a.json", """{"1":{"class_type":"SaveImage","inputs":{}}}""").first,
+        )
+    }
+
+    @Test
+    fun isUiWorkflowDirectly() {
+        assertTrue("nodes 数组 + last_node_id", isUiWorkflow(JSONObject("""{"last_node_id":3,"nodes":[]}""")))
+        assertFalse("nodes 是对象", isUiWorkflow(JSONObject("""{"nodes":{"a":1},"links":[]}""")))
+        assertFalse("没有 nodes", isUiWorkflow(JSONObject("""{"links":[]}""")))
+    }
+
     // ---------- §4.13 upgradeCombos ----------
 
     @Test

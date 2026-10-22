@@ -9,6 +9,7 @@ import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -59,6 +61,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -70,6 +73,7 @@ import com.mie.kreaworkbench.data.BUILTIN_SIZES
 import com.mie.kreaworkbench.data.LEGACY_BUILTIN_SIZE_VALUES
 import com.mie.kreaworkbench.data.modelFileName
 import com.mie.kreaworkbench.data.workflows.LoraEntry
+import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_720P
 import com.mie.kreaworkbench.data.workflows.VIDEO_SIZE_SOURCE
@@ -91,6 +95,7 @@ import com.mie.kreaworkbench.ui.components.glassSliderColors
 import com.mie.kreaworkbench.ui.components.glassSwitchColors
 import com.mie.kreaworkbench.ui.components.glassTextFieldColors
 import com.mie.kreaworkbench.ui.locale.knownText
+import com.mie.kreaworkbench.ui.locale.workflowLabel
 import com.mie.kreaworkbench.util.VIDEO_WARN_BYTES
 import com.mie.kreaworkbench.util.VideoThumb
 import com.mie.kreaworkbench.util.formatBytes
@@ -295,6 +300,15 @@ fun SpecRow(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             stringResource(R.string.choices_not_loaded),
+                            fontSize = 11.sp,
+                            color = metaInk,
+                        )
+                    } else {
+                        // 服务器答上来了但这类模型一个都没有（内置模板的空占位落在这一支）：
+                        // 就地提示要装哪类模型（r35）
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.model_kind_missing, label),
                             fontSize = 11.sp,
                             color = metaInk,
                         )
@@ -812,46 +826,109 @@ fun DrawFilterRow(vm: CustomModel) {
     }
 }
 
-/** 无可用工作流时的空状态：生成页与设置页共用，按钮跳工作流/库页。
- *  [immersive] = 压在生成页的共享背景上：白字 + 阴影 + 玻璃按钮；其他页面保持原配色。 */
+/** 生成页空状态（r38 E6 重做，模型页未选工作流时同用）：深色铺底/沉浸风格保持。
+ *  按配置进度显示两种状态——没配服务器：引导去配置；配好了：直接列当前内置模板点选。
+ *  两种状态底部都有「导入自己的工作流」小字入口。 */
 @Composable
-fun WorkflowEmptyState(onGoImport: () -> Unit, immersive: Boolean = false) {
+fun WorkflowEmptyState(
+    serverReady: Boolean,
+    builtins: List<ImportedWorkflowMeta>,
+    onConfigureServer: () -> Unit,
+    onPickWorkflow: (String) -> Unit,
+    onGoImport: () -> Unit,
+    immersive: Boolean = false,
+) {
     val scheme = MaterialTheme.colorScheme
     val ink = if (immersive) ImmersiveInk else scheme.onSurface
     val muted = if (immersive) ImmersiveInkMuted else scheme.onSurfaceVariant
+    val titleStyle = MaterialTheme.typography.titleMedium.copy(shadow = if (immersive) ImmersiveShadow else null)
     Column(
         Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        if (!serverReady) {
+            Text(stringResource(R.string.empty_state_no_server), style = titleStyle, color = ink)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.empty_state_no_server_body),
+                fontSize = 12.sp,
+                color = muted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = onConfigureServer,
+                shape = RoundedCornerShape(16.dp),
+                colors = if (immersive) {
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.18f),
+                        contentColor = ImmersiveInk,
+                    )
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
+                border = if (immersive) BorderStroke(1.dp, ImmersiveHairline) else null,
+            ) {
+                Text(stringResource(R.string.empty_state_configure_server))
+            }
+        } else {
+            Text(stringResource(R.string.empty_state_pick_template), style = titleStyle, color = ink)
+            Spacer(Modifier.height(12.dp))
+            if (builtins.isEmpty()) {
+                Text(
+                    stringResource(R.string.empty_state_no_builtins),
+                    fontSize = 12.sp,
+                    color = muted,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            } else {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    builtins.forEach { meta ->
+                        EmptyTemplateRow(
+                            label = workflowLabel(meta),
+                            immersive = immersive,
+                            onClick = { onPickWorkflow(meta.id) },
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
         Text(
-            stringResource(R.string.empty_workflows),
-            style = MaterialTheme.typography.titleMedium.copy(shadow = if (immersive) ImmersiveShadow else null),
-            color = ink,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            stringResource(R.string.empty_workflows_body),
+            stringResource(R.string.empty_state_import_own),
             fontSize = 12.sp,
             color = muted,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 12.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onGoImport)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
         )
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onGoImport,
-            shape = RoundedCornerShape(16.dp),
-            colors = if (immersive) {
-                ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.18f),
-                    contentColor = ImmersiveInk,
-                )
-            } else {
-                ButtonDefaults.buttonColors()
-            },
-            border = if (immersive) BorderStroke(1.dp, ImmersiveHairline) else null,
-        ) {
-            Text(stringResource(R.string.go_import))
-        }
+    }
+}
+
+/** r38 E6：空状态的模板行——与库页内置分组同款极简白字行，点击选中。 */
+@Composable
+private fun EmptyTemplateRow(label: String, immersive: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = if (immersive) ImmersiveInk else MaterialTheme.colorScheme.onSurface,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

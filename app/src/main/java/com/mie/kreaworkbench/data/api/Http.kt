@@ -1,8 +1,10 @@
 package com.mie.kreaworkbench.data.api
 
+import android.content.Context
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.settings.SettingsStore
+import com.mie.kreaworkbench.ui.locale.localized
 import com.mie.kreaworkbench.ui.locale.str
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -15,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.Proxy
@@ -64,6 +67,27 @@ fun trimBase(url: String): String {
         "http://$cleaned"
     }
     return if (withScheme.toHttpUrlOrNull() != null) withScheme else ""
+}
+
+/**
+ * 地址输入框的规范化（round34）：去首尾空格、全角冒号/斜杠转半角、没写 scheme 补 http://
+ * （大写 HTTP:// 也认，统一转小写），最后交 trimBase 清洗与 HttpUrl 强校验。
+ * 空串、没有主机名（「http://」「：8188」）或解析不过返回 null，调用方就地提示。
+ * 只在点「测试连接」或落库前用，输入过程中不调用。
+ */
+fun normalizeServerUrl(raw: String): String? {
+    if (raw.isBlank()) return null
+    var s = raw.trim().replace('：', ':').replace('／', '/')
+    s = if (s.startsWith("http://", true) || s.startsWith("https://", true)) {
+        val idx = s.indexOf("://")
+        s.substring(0, idx).lowercase() + s.substring(idx)
+    } else {
+        "http://$s"
+    }
+    val host = s.substringAfter("://").substringBefore('/')
+        .substringBefore('?').substringBefore('#').substringAfterLast('@')
+    if (host.isBlank() || host.startsWith(':')) return null
+    return trimBase(s).ifBlank { null }
 }
 
 /** 配置的 ComfyUI 地址；空 = 未配置。 */
@@ -179,6 +203,9 @@ private fun errorText(json: JSONObject): String? {
     val e = json.optJSONObject("error")
     if (e != null) {
         val app = KreaApp.instance
+        // r37.1：模型文件不在服务器上（value_not_in_list）是升级后最常见的失败，
+        // 原文是内部校验信息，先翻成用户能看懂的一句话；其余错误保持原样。
+        modelMissingText(json, app)?.let { return it }
         var text = e.optString("message").ifBlank { app.str(R.string.err_request_failed) }
         val details = e.optString("details")
         if (details.isNotBlank()) text = app.str(R.string.err_join_colon, text, details)
@@ -202,6 +229,44 @@ private fun errorText(json: JSONObject): String? {
         return text
     }
     return json.optString("error").ifBlank { null }
+}
+
+/** ComfyUI 加载器类节点的模型文件字段：value_not_in_list 命中这些字段时才翻成「模型不存在」。 */
+private val MODEL_FILE_FIELDS = setOf(
+    "ckpt_name", "unet_name", "clip_name", "vae_name", "lora_name", "model_name", "control_net_name",
+)
+
+/**
+ * r37.1：预填/保存的模型文件服务器上没有时，ComfyUI 拒任务（400）并在 error/node_errors 里报
+ * value_not_in_list，原文（Prompt outputs failed validation: Value not in list: vae_name: ...）
+ * 全是内部信息。这里收集所有缺失的模型文件名，翻成一句用户能看懂的话（多个文件按当前语言拼接）；
+ * 没有模型类缺失返回 null，走原有格式化。
+ */
+private fun modelMissingText(json: JSONObject, app: Context): String? {
+    val missing = LinkedHashSet<String>()
+    fun scan(errs: JSONArray?) {
+        if (errs == null) return
+        for (i in 0 until errs.length()) {
+            val o = errs.optJSONObject(i) ?: continue
+            if (o.optString("type") != "value_not_in_list") continue
+            val details = o.optString("details")
+            // 字段名优先取 extra_info.input_name，格式变了也有兜底；值是 details 冒号后的引号内文件名
+            val field = o.optJSONObject("extra_info")?.optString("input_name").orEmpty()
+                .ifBlank { details.substringBefore(':').trim() }
+            if (field !in MODEL_FILE_FIELDS) continue
+            val name = details.substringAfter(':', "").trim().trim('\'', '"')
+            if (name.isNotBlank()) missing.add(name)
+        }
+    }
+    scan(json.optJSONObject("error")?.optJSONArray("errors"))
+    val nodeErrors = json.optJSONObject("node_errors")
+    if (nodeErrors != null) {
+        val keys = nodeErrors.keys()
+        while (keys.hasNext()) scan(nodeErrors.optJSONObject(keys.next())?.optJSONArray("errors"))
+    }
+    if (missing.isEmpty()) return null
+    val zh = app.localized().resources.configuration.locales[0].language == "zh"
+    return app.str(R.string.err_model_not_found, missing.joinToString(if (zh) "、" else ", "))
 }
 
 fun httpFallback(code: Int): String = if (code == 401) {

@@ -1,0 +1,233 @@
+{
+  "13": {
+    "inputs": {
+      "aspect_ratio": "9:16 (Portrait Widescreen)",
+      "megapixels": 2,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "画幅比例与分辨率"
+    }
+  },
+  "461": {
+    "inputs": {
+      "filename_prefix": "ComfyWorkbench",
+      "format": "png",
+      "format.bit_depth": "8-bit",
+      "format.input_color_space": "sRGB",
+      "images": [
+        "480",
+        0
+      ]
+    },
+    "class_type": "SaveImageAdvanced",
+    "_meta": {
+      "title": "编辑结果 · 保存图像"
+    }
+  },
+  "475": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "主参考图"
+    }
+  },
+  "476": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "扩散模型"
+    }
+  },
+  "477": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "文本编码器"
+    }
+  },
+  "478": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "479": {
+    "inputs": {
+      "width": [
+        "13",
+        0
+      ],
+      "height": [
+        "13",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空白潜空间"
+    }
+  },
+  "480": {
+    "inputs": {
+      "samples": [
+        "540",
+        0
+      ],
+      "vae": [
+        "478",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE 解码"
+    }
+  },
+  "482": {
+    "inputs": {
+      "switch": false,
+      "on_false": [
+        "484",
+        2
+      ],
+      "on_true": [
+        "479",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "潜空间来源切换"
+    }
+  },
+  "483": {
+    "inputs": {
+      "device": "off",
+      "dtype": "default",
+      "model": [
+        "476",
+        0
+      ]
+    },
+    "class_type": "QwenImage21Cache",
+    "_meta": {
+      "title": "缓存设置"
+    }
+  },
+  "484": {
+    "inputs": {
+      "prompt": "描述要把参考图改成什么，例如：把背景换成雪夜的城市街道，人物保持不变",
+      "negative_prompt": "低质量，模糊，畸形",
+      "resolution": 1024,
+      "clip": [
+        "477",
+        0
+      ],
+      "images.image_1": [
+        "475",
+        0
+      ],
+      "vae": [
+        "478",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "编辑提示词与条件"
+    }
+  },
+  "488": {
+    "inputs": {
+      "offload_model": true,
+      "offload_cache": true,
+      "anything": [
+        "461",
+        0
+      ]
+    },
+    "class_type": "VRAMCleanup",
+    "_meta": {
+      "title": "完成后清理显存"
+    }
+  },
+  "540": {
+    "inputs": {
+      "seed": 0,
+      "steps": 40,
+      "cfg": 3,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "acceleration": "均衡",
+      "cache_device": "自动",
+      "model": [
+        "483",
+        0
+      ],
+      "positive": [
+        "484",
+        0
+      ],
+      "negative": [
+        "484",
+        1
+      ],
+      "latent_image": [
+        "482",
+        0
+      ]
+    },
+    "class_type": "QwenImage21FastSampler",
+    "_meta": {
+      "title": "快速采样"
+    }
+  },
+  "544": {
+    "inputs": {
+      "direction": "right",
+      "match_image_size": true,
+      "spacing_width": 0,
+      "spacing_color": "white",
+      "image1": [
+        "475",
+        0
+      ],
+      "image2": [
+        "461",
+        0
+      ]
+    },
+    "class_type": "ImageStitch",
+    "_meta": {
+      "title": "原图与结果 · 横向拼接"
+    }
+  },
+  "545": {
+    "inputs": {
+      "images": [
+        "544",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "对比预览"
+    }
+  }
+}

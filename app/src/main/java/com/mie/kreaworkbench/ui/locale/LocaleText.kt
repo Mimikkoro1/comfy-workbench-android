@@ -9,6 +9,8 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.data.workflows.BuiltinTemplates
+import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 
 /**
  * API 33 以下 AppCompat 只给 Activity 套 per-app 语言，Application / Service 要自己包一层。
@@ -43,6 +45,27 @@ fun Context.known(text: String): String {
 fun knownText(text: String): String {
     val id = KNOWN_COPY[text] ?: return text
     return stringResource(id)
+}
+
+/**
+ * r38：工作流显示名的唯一入口——内置固定 id 按应用语言取名称资源，
+ * 其余（导入/副本/外部条目）维持 knownText 现状。存盘的 display_name 不动。
+ */
+@Composable
+fun workflowLabel(meta: ImportedWorkflowMeta): String {
+    val res = BuiltinTemplates.nameResOf(meta.id)
+    return if (meta.source == BuiltinTemplates.SOURCE && res != null) stringResource(res)
+    else knownText(meta.displayName)
+}
+
+/** r38 E3：内置清单条目的显示名（恢复弹窗等直接拿 [BuiltinTemplates.Entry] 的场合），与 [workflowLabel] 同一入口。 */
+@Composable
+fun workflowLabel(entry: BuiltinTemplates.Entry): String = stringResource(entry.nameRes)
+
+/** 同 [workflowLabel] 的非 Composable 版：只本地化内置模板名，其余原样返回存盘名。 */
+fun Context.workflowLabelStr(meta: ImportedWorkflowMeta): String {
+    val res = BuiltinTemplates.nameResOf(meta.id)
+    return if (meta.source == BuiltinTemplates.SOURCE && res != null) str(res) else meta.displayName
 }
 
 /** 引擎写入的阶段 token（采样 N/M、合成视频）在显示时映射，不改存下来的字。 */

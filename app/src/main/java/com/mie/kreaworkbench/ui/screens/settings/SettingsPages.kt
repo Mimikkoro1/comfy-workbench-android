@@ -5,6 +5,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -60,6 +62,8 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Trash2
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.data.discovery.LanHit
+import com.mie.kreaworkbench.data.discovery.LanScanner
 import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.ui.locale.AppLocale
@@ -83,6 +87,7 @@ import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
 import com.mie.kreaworkbench.util.BatteryKeep
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -127,9 +132,27 @@ internal fun SettingsPageScaffold(
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun ConnectionPage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
+fun ConnectionPage(
+    onBack: () -> Unit,
+    autoScan: Boolean = false,
+    onAutoScanConsumed: () -> Unit = {},
+    vm: AppSettingsModel = viewModel(),
+) {
     val s by vm.settings.collectAsState()
     val app = LocalContext.current.applicationContext as KreaApp
+    // r39：本机是否在 Wi-Fi/以太网上（打开页面时查一次，按钮据此置灰）
+    var lanOk by remember { mutableStateOf(LanScanner.available(app)) }
+    // r39：离开页面自动取消扫描（AppSettingsModel 是页面级单例，必须自己收）
+    DisposableEffect(Unit) {
+        onDispose { vm.cancelScan() }
+    }
+    // r39：引导页「自动查找」直达：首次组合时立即开 ComfyUI 扫描弹窗
+    androidx.compose.runtime.LaunchedEffect(autoScan) {
+        if (autoScan) {
+            onAutoScanConsumed()
+            if (lanOk) vm.startScan(LanHit.Kind.COMFY)
+        }
+    }
     var textToImage by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(s.currentWorkflow) {
         val id = s.currentWorkflow
@@ -195,10 +218,11 @@ fun ConnectionPage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
                         editing = false
                     },
                     onDelete = { confirmDelete = it },
-                    onFocusLost = { vm.save() },
-                    debounceKey = listOf(vm.url.value, vm.user.value, vm.pass.value),
-                    onDebounce = { vm.save() },
+                    onFocusGained = { editing = true },
+                    onFocusLost = {},
                 )
+                Spacer(Modifier.height(8.dp))
+                AutoFindRow(lanOk) { vm.startScan(LanHit.Kind.COMFY) }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = vm.name.value,
@@ -271,7 +295,7 @@ fun ConnectionPage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
 
             if (showGacha) {
                 Spacer(Modifier.height(20.dp))
-                GachaServerCard(vm, s.advGachaHistory)
+                GachaServerCard(vm, s.advGachaHistory, lanOk)
             }
 
             // r31：服务器连不上 / 地址填错时，任务可能一直挂在「生成中」。
@@ -328,13 +352,21 @@ fun ConnectionPage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
             },
         )
     }
+
+    // r39：局域网扫描弹窗（状态与扫描协程都在 AppSettingsModel）
+    vm.scan.value?.let { st ->
+        LanScanDialog(
+            state = st,
+            onCancel = { vm.cancelScan() },
+            onPick = { vm.pickScanHit(it) },
+        )
+    }
 }
 
 @Composable
-private fun GachaServerCard(vm: AppSettingsModel, history: List<String>) {
+private fun GachaServerCard(vm: AppSettingsModel, history: List<String>, lanOk: Boolean) {
     var editing by remember { mutableStateOf<Boolean?>(null) }
     val expanded = editing ?: vm.gachaUrl.value.isBlank()
-    var touched by remember { mutableStateOf(false) }
     val status = if (vm.gachaLatency.value >= 0) {
         stringResource(R.string.gacha_latency, vm.gachaLatency.value.toInt())
     } else {
@@ -375,10 +407,12 @@ private fun GachaServerCard(vm: AppSettingsModel, history: List<String>) {
                     editing = false
                 },
                 onDelete = { vm.deleteGachaHistory(it) },
-                onFocusGained = { touched = true },
-                onFocusLost = { if (touched) vm.commitGachaUrl() },
+                onFocusGained = { editing = true },
+                onFocusLost = {},
             )
             Spacer(Modifier.height(12.dp))
+            AutoFindRow(lanOk) { vm.startScan(LanHit.Kind.GACHA) }
+            Spacer(Modifier.height(4.dp))
             val testing = stringResource(R.string.settings_testing)
             val testLabel = stringResource(R.string.settings_test)
             PrimaryButton(if (vm.gachaBusy.value) testing else testLabel, enabled = !vm.gachaBusy.value) {
@@ -617,7 +651,7 @@ fun AppearancePage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
 
 /**
  * 地址栏。右侧箭头弹出已保存列表，点一项就切换，行尾可以删。
- * 空着时显示灰色占位。debounceKey 非空时，值停 500ms 再落库。
+ * 空着时显示灰色占位。输入过程不落库不校验：只有测试连接成功才由调用方保存。
  */
 @Composable
 private fun AddressMenuField(
@@ -631,15 +665,7 @@ private fun AddressMenuField(
     onDelete: (String) -> Unit,
     onFocusLost: () -> Unit,
     onFocusGained: () -> Unit = {},
-    debounceKey: Any? = null,
-    onDebounce: (() -> Unit)? = null,
 ) {
-    if (onDebounce != null) {
-        androidx.compose.runtime.LaunchedEffect(debounceKey) {
-            kotlinx.coroutines.delay(500)
-            onDebounce()
-        }
-    }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -720,6 +746,79 @@ private fun ServerSummaryRow(
 /** 地址只留 host:port（去掉 scheme、路径与 user@）。 */
 internal fun hostPort(url: String): String =
     url.trim().substringAfter("://").substringBefore('/').substringBefore('?').substringAfterLast('@')
+
+/** r39：「自动查找」入口行。不在 Wi-Fi/以太网时按钮置灰并提示。 */
+@Composable
+private fun AutoFindRow(lanOk: Boolean, onStart: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = onStart,
+            enabled = lanOk,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+        ) {
+            Text(stringResource(R.string.scan_action), maxLines = 1)
+        }
+        if (!lanOk) {
+            Text(stringResource(R.string.scan_need_wifi), fontSize = 12.sp, color = ImmersiveInkMuted)
+        }
+    }
+}
+
+/** r39：局域网扫描弹窗。进度实时更新、结果实时追加；点一行只填输入框（不自动测试、不保存）。 */
+@Composable
+private fun LanScanDialog(
+    state: AppSettingsModel.ScanUi,
+    onCancel: () -> Unit,
+    onPick: (LanHit) -> Unit,
+) {
+    GlassAlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(stringResource(R.string.scan_action)) },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp)) {
+                if (!state.finished) {
+                    Text(
+                        stringResource(R.string.scan_progress, state.subnet, state.done, state.total),
+                        fontSize = 13.sp,
+                    )
+                } else if (state.hits.isEmpty()) {
+                    Text(stringResource(R.string.scan_empty), fontSize = 13.sp)
+                }
+                state.hits.forEach { hit ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(hit) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                hostPort(hit.url),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = ImmersiveInk,
+                            )
+                            if (hit.detail.isNotBlank()) {
+                                Text(
+                                    hit.detail,
+                                    fontSize = 12.sp,
+                                    color = ImmersiveInkMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
 
 @Composable
 private fun HistoryMenuButton(

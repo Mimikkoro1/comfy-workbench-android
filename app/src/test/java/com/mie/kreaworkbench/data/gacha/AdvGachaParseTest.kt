@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.data.gacha
 
+import com.mie.kreaworkbench.data.api.ApiException
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -247,5 +248,32 @@ class AdvGachaParseTest {
         val gongsu = options.modes.first { it.id == "gongsu" }
         assertEquals("攻速", gongsu.label)
         assertEquals("", gongsu.labelEn)
+    }
+
+    // ---- r39：服务端错误文本与连接失败分类 ----
+
+    @Test
+    fun serverErrorTextPrefersErrorMessageThenErrorThenDetail() {
+        assertEquals("m", gachaServerErrorText(JSONObject().put("error", JSONObject().put("message", "m"))))
+        assertEquals("e", gachaServerErrorText(JSONObject().put("error", "e")))
+        assertEquals("d", gachaServerErrorText(JSONObject().put("detail", "d")))
+        // error 是对象且 message 为空时，不能把对象 toString 当文案，要落到 detail
+        assertEquals(
+            "d",
+            gachaServerErrorText(
+                JSONObject().put("error", JSONObject().put("message", "")).put("detail", "d"),
+            ),
+        )
+        assertEquals("", gachaServerErrorText(JSONObject()))
+    }
+
+    @Test
+    fun httpErrorsAreNotTransportFailures() {
+        // HTTP 5xx / 4xx：服务端错误，保留 HTTP 文案，不再误报「连不上」
+        assertFalse(isGachaTransportFailure(ApiException("x", network = true, code = 500)))
+        assertFalse(isGachaTransportFailure(ApiException("x", network = false, code = 404)))
+        // 连接层失败（code==0）才按「连不上」报
+        assertTrue(isGachaTransportFailure(ApiException("x", network = true)))
+        assertTrue(isGachaTransportFailure(ApiException("x")))
     }
 }

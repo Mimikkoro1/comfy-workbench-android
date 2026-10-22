@@ -1,9 +1,11 @@
 package com.mie.kreaworkbench.ui.screens.settings
 
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,10 +50,9 @@ import com.mie.kreaworkbench.util.BatteryKeep
 /**
  * 设置 tab 主页（round13 5.2）：分组入口列表，条目进二级页——
  * ComfyUI 服务器（地址/凭据/测试连接/最近地址）、后台运行、外观与语言、存储与缓存、关于；
- * 每个入口副标题只写一行当前状态（r13fix 第 7 项），不写说明。原分组：
- * 连接（地址/凭据/测试连接/最近地址）、后台运行（5.1 合并后的一行入口，副标题只写状态）、
- * 外观与语言、存储与缓存（现成缓存管理弹层）、关于。各条目内容自旧首页原样搬入
- * SettingsPages.kt / CacheManagementSheet，未新增设置项。
+ * 每个入口副标题只写一行当前状态（r13fix 第 7 项），不写说明。
+ * r38：快速开始与「工作流与模板」两个一级入口移除——前者在服务器未设置时降级为行下小字入口，
+ * 也可从关于页复看；后者整个二级页删除（内置模板管理并入库页）。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -109,6 +111,18 @@ fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel(), nav: N
                         supporting = { StatusText(serverStatus) },
                         trailing = { Chevron() },
                     )
+                    // r38：服务器未设置时（与该行显示「未设置」同一判定），行下小字快速开始入口；配好后消失。
+                    if (s.serverUrl.isBlank()) {
+                        Text(
+                            stringResource(R.string.settings_quick_start_hint),
+                            fontSize = 13.sp,
+                            color = ImmersiveInkMuted,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = nav::openOnboarding)
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                    }
                     GroupedItem(
                         index = 1,
                         count = 5,

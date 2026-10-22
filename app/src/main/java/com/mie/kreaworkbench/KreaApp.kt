@@ -67,7 +67,9 @@ class KreaApp : Application(), ImageLoaderFactory {
         scope.launch {
             // 启动兜底：currentWorkflow 非空但 store 里查不到（direct9 升级用户存的内置 id、
             // 或指向已删除的导入工作流）→ 写回 "" 进空状态。这就是全部数据迁移，不做专门迁移。
+            // list() 同时触发懒加载：首次安装/列表为空时自动播种内置模板（WorkflowStore 内去重）。
             try {
+                container.workflowStore.list()
                 val cur = container.settings.current().currentWorkflow
                 if (cur.isNotBlank() && container.workflowStore.labelOf(cur) == null) {
                     container.settings.update { it.copy(currentWorkflow = "") }

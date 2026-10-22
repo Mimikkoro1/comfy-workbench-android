@@ -57,9 +57,10 @@ internal fun aboutOpenUrl(raw: String): String? {
     return null
 }
 
-/** 设置页点进来的关于二级页。返回走 Overlay 的 pop（返回键 / 预测性返回 / 顶栏返回）。 */
+/** 设置页点进来的关于二级页。返回走 Overlay 的 pop（返回键 / 预测性返回 / 顶栏返回）。
+ *  r38：新增「重新查看快速开始」入口（[onQuickStart]），NavModel.openOnboarding 保证不叠栈。 */
 @Composable
-fun AboutScreen(onBack: () -> Unit) {
+fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
     val context = LocalContext.current
     val name = stringResource(R.string.app_name)
     val toaster = LocalToaster.current
@@ -97,7 +98,7 @@ fun AboutScreen(onBack: () -> Unit) {
             CardGroup {
                 GroupedItem(
                     index = 0,
-                    count = 3,
+                    count = 4,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_version)) },
                     supporting = { Text("${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}") },
@@ -127,9 +128,16 @@ fun AboutScreen(onBack: () -> Unit) {
                         null
                     },
                 )
+                // r38：快速开始复看入口（原设置页一级入口移到这里）。
                 GroupedItem(
                     index = 2,
-                    count = 3,
+                    count = 4,
+                    onClick = onQuickStart,
+                    headline = { Text(stringResource(R.string.about_quick_start)) },
+                )
+                GroupedItem(
+                    index = 3,
+                    count = 4,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_system)) },
                     supporting = {

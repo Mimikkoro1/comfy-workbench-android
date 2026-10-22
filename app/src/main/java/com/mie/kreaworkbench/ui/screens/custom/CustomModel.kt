@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -15,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.ui.locale.workflowLabelStr
 import com.mie.kreaworkbench.data.api.trimBase
 import com.mie.kreaworkbench.data.buildCustomBody
 import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
@@ -57,6 +59,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -76,6 +79,18 @@ import java.util.UUID
 class CustomModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as KreaApp).container
     val settings = c.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UserSettings())
+
+    /** r39：DataStore 首次发射后为 true。在此之前 UI 不渲染抽卡默认值、不触发目录刷新，防假默认闪现。 */
+    var settingsLoaded by mutableStateOf(false)
+        private set
+
+    init {
+        viewModelScope.launch {
+            c.settings.flow.first()
+            settingsLoaded = true
+        }
+    }
+
     val live = c.engine.snapshot
 
     /** r27.1：最近一次生成完成落库的行 id（引擎事件）。生成页背景只在这张图出现时播换图滑入。 */
@@ -291,6 +306,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         val pendingFlush = persistJob?.isActive == true
         persistJob?.cancel()
         boundId = id
+        autoRefreshDone = false
         tempPrompt = ""
         tempPromptPinned = false
         // 换绑时清掉上一个工作流残留的参考图选择（图片字段不持久化）
@@ -314,39 +330,66 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             // ③ 再加载新工作流：restore 读到的一定是已把挂起编辑落盘后的 last_values.json
-            loading = true
-            try {
-                val pair = c.workflowStore.get(id)
-                if (pair == null) {
-                    message = getApplication<Application>().str(R.string.err_workflow_deleted)
-                    c.settings.update { it.copy(currentWorkflow = "") }
-                    return@launch
-                }
-                val (wf, def) = pair
-                workflowJson = wf
-                defJson = def
-                displayName = c.workflowStore.labelOf(id) ?: id
-                outputNode = def.optString("kwb_output_node").ifBlank { pickOutputNode(wf) }
-                outputKind = outputKindOf(def)
-                specs = buildList {
-                    val arr = def.optJSONArray("user_facing_inputs")
-                    if (arr != null) for (i in 0 until arr.length()) {
-                        arr.optJSONObject(i)?.let { add(it) }
-                    }
-                }
-                loraEntries = loraEntriesOf(wf)
-                restore(id)
-                loraManaged = loraManagedSpecKeys(loraEntries, specs)
-                // 换绑先清上一工作流的选项映射，避免同名 key（node|field 可能撞）串台；
-                // 下面 loadChoices 失败的槽位就是「无选项 + 提示」，而不是残留旧值
-                modelChoices = emptyMap()
-                comboChoices = emptyMap()
-                loadChoices()
-            } catch (e: Exception) {
-                message = e.message ?: e.javaClass.simpleName
-            } finally {
-                loading = false
+            loadBound(id)
+        }
+    }
+
+    /**
+     * r38 E5：从 bind 抽出的加载尾（绑定与「编辑参数后同 id 重载」共用）：
+     * 读工作流与定义 → 组 specs → restore → 拉模型选项。工作流已删 → 置空回空状态。
+     */
+    private suspend fun loadBound(id: String) {
+        loading = true
+        try {
+            val pair = c.workflowStore.get(id)
+            if (pair == null) {
+                message = getApplication<Application>().str(R.string.err_workflow_deleted)
+                c.settings.update { it.copy(currentWorkflow = "") }
+                return
             }
+            val (wf, def) = pair
+            workflowJson = wf
+            defJson = def
+            displayName = c.workflowStore.metaOf(id)
+                ?.let { getApplication<Application>().workflowLabelStr(it) } ?: id
+            outputNode = def.optString("kwb_output_node").ifBlank { pickOutputNode(wf) }
+            outputKind = outputKindOf(def)
+            specs = buildList {
+                val arr = def.optJSONArray("user_facing_inputs")
+                if (arr != null) for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { add(it) }
+                }
+            }
+            loraEntries = loraEntriesOf(wf)
+            restore(id)
+            loraManaged = loraManagedSpecKeys(loraEntries, specs)
+            // 换绑先清上一工作流的选项映射，避免同名 key（node|field 可能撞）串台；
+            // 下面 loadChoices 失败的槽位就是「无选项 + 提示」，而不是残留旧值
+            modelChoices = emptyMap()
+            comboChoices = emptyMap()
+            loadChoices()
+            maybeAutoRefreshChoices()
+        } catch (e: Exception) {
+            message = e.message ?: e.javaClass.simpleName
+        } finally {
+            loading = false
+        }
+    }
+
+    /**
+     * r38 E5：编辑参数页覆盖了当前绑定工作流的 definition 后由 definitionEdits 触发——
+     * 同 id 强制重载（boundId 去重挡不住）。先刷盘挂起的表单编辑再重载；
+     * 不换绑，不清文本卡/参考图。
+     */
+    fun onDefinitionEdited(id: String) {
+        if (boundId != id) return
+        viewModelScope.launch {
+            persistJob?.cancel()
+            try {
+                withContext(Dispatchers.IO) { persistNow(id) }
+            } catch (_: Exception) {
+            }
+            loadBound(id)
         }
     }
 
@@ -489,6 +532,48 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var persistJob: Job? = null
+
+    /** r35.1：本轮绑定是否已自动补拉过选项（每次换绑重置，只补一次，不循环重试）。 */
+    private var autoRefreshDone = false
+
+    /** 模型/在线 select 槽是否还有没拿到选项的（空或拉取失败都算缺）。 */
+    private fun choicesIncomplete(): Boolean {
+        for (spec in specs) {
+            val key = Specs.key(spec)
+            when (Specs.type(spec)) {
+                "model" -> if (modelChoices[key].isNullOrEmpty()) return true
+                "select" ->
+                    if (spec.optString("kwb_combo").isNotBlank() && comboChoices[key].isNullOrEmpty()) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * 打开工作流后选项仍缺（首屏拉取时网络未就绪、服务器冷启动超时等）：后台自动补拉一次，
+     * 等价于手点模型页的「刷新」（models(refresh=true) + 重拉选项）。延迟一小段再发，避开
+     * 冷启动连接建立期；成功则下拉就地就绪，失败保持既有提示（选项未加载/服务器未安装），
+     * 用户仍可手动刷新。选项齐了或未配服务器则不发。
+     */
+    private fun maybeAutoRefreshChoices() {
+        if (autoRefreshDone) return
+        if (!choicesIncomplete()) return
+        autoRefreshDone = true
+        val target = boundId
+        viewModelScope.launch {
+            delay(1_500)
+            if (boundId != target) return@launch
+            try {
+                if (c.settings.current().serverUrl.isBlank()) return@launch
+                c.api.models(refresh = true)
+                loadChoices()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 静默：界面已有「选项未加载/服务器未安装」提示兜底
+            }
+        }
+    }
 
     /** 表单值落盘：打字/拖滑条高频触发，做 300ms debounce；提交前等关键路径用 persistNow() 直写。 */
     fun persist() {
@@ -814,6 +899,14 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun pickGachaMaster(value: String) {
+        // r39：目录未就绪（空目录 / 刷新中）时不拿空列表跑校正——那会把选中校正成「不限」并落盘。
+        // 只记母版并落盘，目录到了由 applyCorrectedGacha 统一校正五维。
+        val catalogReady = gachaMasters.isNotEmpty() && gachaRefreshJob?.isActive != true
+        if (!catalogReady) {
+            gachaMasterPick = value
+            updateGacha { it.copy(advGachaMaster = value) }
+            return
+        }
         // r32：选中母版立刻按它的 has_nude / has_signature 校正其它维，
         // 比如从有 nude 的母版切到没有的，mode 不能停在 nude。
         val after = correctGachaSelection(
@@ -863,32 +956,54 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         tempPromptPinned = false
     }
 
-    fun refreshGachaMasters() {
-        viewModelScope.launch {
-            // r32：刷新一开始就清目录。切到另一台抽卡服时，旧母版/旧筛选项一项都不许留着，
-            // 否则用户看到的是上一台服的菜单，点了只会白跑。
-            gachaMasters = emptyList()
-            gachaOptions = null
+    // r39：目录刷新单飞——新请求取消旧的，旧结果按代号丢弃；同址 10s 内不重刷
+    private var gachaRefreshJob: Job? = null
+    private var gachaRefreshGen = 0
+    /** 上次成功拿到目录的地址（null = 还没成功过）与时刻（elapsedRealtime）。 */
+    private var gachaRefreshOkBase: String? = null
+    private var gachaRefreshOkAt = 0L
+
+    /**
+     * 按指定地址刷新母版目录（r39 重写）：
+     * - 刷新不再先清目录：保留上一份，成功整体替换，同服失败只报错不清、不重置任何选择；
+     * - 结果写回前按代号校验，晚到的旧请求一律丢弃；
+     * - 只有成功拿到目录才校正五维并落盘（校正基准用此刻的设置值，不是请求前快照）。
+     */
+    fun refreshGachaMasters(base: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (
+            base == gachaRefreshOkBase &&
+            now - gachaRefreshOkAt < 10_000L &&
+            gachaRefreshJob?.isActive != true
+        ) {
+            return
+        }
+        gachaRefreshJob?.cancel()
+        val gen = ++gachaRefreshGen
+        gachaRefreshJob = viewModelScope.launch {
             gachaMastersLoaded = false
             gachaMastersError = ""
             try {
-                val snapshot = c.settings.current()
-                val base = snapshot.advGachaUrl.trim()
                 val catalog = c.gacha.catalog(base)
+                if (gen != gachaRefreshGen) return@launch
                 gachaMasters = catalog.masters
                 gachaOptions = catalog.options
-                gachaMastersError = ""
-                applyCorrectedGacha(catalog, snapshot)
+                gachaRefreshOkBase = base
+                gachaRefreshOkAt = SystemClock.elapsedRealtime()
+                applyCorrectedGacha(catalog)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // 失败同样是空目录 + 错误，不保留上一台服务器的任何东西（r31 母版清空扩展到 options）
-                gachaMasters = emptyList()
-                gachaOptions = null
-                gachaMasterPick = ""
+                if (gen != gachaRefreshGen) return@launch
                 gachaMastersError = e.message ?: e.javaClass.simpleName
+                // 同一台服（上次成功过的地址）：保留旧目录只报错，不动 pick、不落盘；
+                // 换了地址（或从没成功过）才清空，不留上一台服的菜单（r32 语义保留在切服场景）
+                if (gachaRefreshOkBase != base) {
+                    gachaMasters = emptyList()
+                    gachaOptions = null
+                }
             } finally {
-                gachaMastersLoaded = true
+                if (gen == gachaRefreshGen) gachaMastersLoaded = true
             }
         }
     }
@@ -910,9 +1025,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         gachaPoolPick = sel.pool
     }
 
-    /** 用新目录校正脏选中；值变了顺手写回设置，免得下次冷启动又拿旧 id 发请求。 */
-    private fun applyCorrectedGacha(catalog: GachaCatalog, s: UserSettings) {
-        val before = currentGachaSelection(s)
+    /** 用新目录校正脏选中；值变了顺手写回设置，免得下次冷启动又拿旧 id 发请求。
+     *  r39：只在成功拿到目录后调用；before 用此刻的设置值，不用请求前拍的快照。 */
+    private suspend fun applyCorrectedGacha(catalog: GachaCatalog) {
+        val before = currentGachaSelection(c.settings.current())
         val after = correctGachaSelection(before, catalog.masters, catalog.options)
         applyGachaSelection(after)
         if (after != before) {
@@ -1018,6 +1134,13 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         val id = boundId ?: return false
         if (workflowJson == null) return false
         val app = getApplication<Application>()
+        // r35：模型槽为空（内置模板的空占位还没选）不排任务——空值会原样发给 ComfyUI，
+        // 只能在服务器端报节点验证错误；这里就地拦下，去模型页选一个就行
+        val missingModel = specs.firstOrNull { Specs.type(it) == "model" && textValues[Specs.key(it)].isNullOrBlank() }
+        if (missingModel != null) {
+            message = app.str(R.string.err_model_not_selected)
+            return false
+        }
         val batchForJob = batchOverride ?: batchSize
         val jobClientId = UUID.randomUUID().toString()
         val values = JSONObject()
@@ -1091,7 +1214,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             outputNode = outputNode,
             outputKind = outputKind,
             workflowName = displayName.takeIf { it.isNotBlank() && it != id }
-                ?: c.workflowStore.labelOf(id).orEmpty(),
+                ?: c.workflowStore.metaOf(id)
+                    ?.let { getApplication<Application>().workflowLabelStr(it) }.orEmpty(),
             loraStates = loraStates,
             loraStrengths = loraStrengths,
         )
@@ -1354,6 +1478,13 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             safeReload()
             c.engine.revision.collect { safeReload() }
+        }
+        // r38 E5：编辑参数页覆盖了某工作流的 definition——正是当前绑定时强制重载到新定义
+        viewModelScope.launch {
+            c.workflowStore.definitionEdits.collect { edit ->
+                val edited = edit?.first ?: return@collect
+                onDefinitionEdited(edited)
+            }
         }
         // 当前提示词库变化（导入/切换/删除）时刷新抽卡筛选的分类列表（自 T2iModel 移植）
         viewModelScope.launch {

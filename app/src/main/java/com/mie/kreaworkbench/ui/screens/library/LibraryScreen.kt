@@ -51,10 +51,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.FileText
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Share2
+import com.composables.icons.lucide.SlidersHorizontal
 import com.composables.icons.lucide.Tag
 import com.composables.icons.lucide.Trash2
 import com.mie.kreaworkbench.R
@@ -75,8 +78,11 @@ import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.locale.known
 import com.mie.kreaworkbench.ui.locale.knownText
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.ui.locale.workflowLabel
 import com.mie.kreaworkbench.ui.nav.NavModel
 import com.mie.kreaworkbench.ui.nav.Overlay
+import com.mie.kreaworkbench.data.workflows.BuiltinTemplates
+import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.data.workflows.safeExportName
 import kotlinx.coroutines.launch
 
@@ -87,6 +93,9 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     val libs by vm.libraries.collectAsState()
     val currentId by vm.currentId.collectAsState()
     val imported by vm.imported.collectAsState()
+    // r38 E3：被删内置模板的墓碑（行与恢复弹窗都随它刷新）
+    val deletedBuiltins by vm.deletedBuiltins.collectAsState()
+    var showDeletedBuiltins by remember { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importLibrary(uri)
     }
@@ -101,8 +110,8 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
     var confirmDeleteLib by remember { mutableStateOf<LibraryMeta?>(null) }
     var confirmDeleteWf by remember { mutableStateOf<Pair<String, String>?>(null) }
     var renameWf by remember { mutableStateOf<Pair<String, String>?>(null) }
-    // r13fix 第 3 项：长按工作流行 → 操作弹层（重命名 / 分享 / 删除）
-    var wfMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // r35：长按工作流行 → 操作弹层；内置模板与导入工作流的菜单不同（内置只读：复制/删除）
+    var wfMenu by remember { mutableStateOf<ImportedWorkflowMeta?>(null) }
     // round13 第 3 项：长按库行 → 菜单（重命名库 / 重命名分组 → 选分组 → 输入新名）
     var libMenu by remember { mutableStateOf<LibraryMeta?>(null) }
     var renameLib by remember { mutableStateOf<LibraryMeta?>(null) }
@@ -171,45 +180,23 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                     ) { Text(stringResource(R.string.import_workflow), fontSize = 12.sp) }
                 }
                 Spacer(Modifier.height(2.dp))
-                imported.forEach { wf ->
-                    val isCur = s.currentWorkflow == wf.id
-                    // round13 第 2 项：改单行紧凑列表——去掉「导入于」次要行、压行距，
-                    // 一屏能看 8 个以上；「当前」徽标 + 加粗即选中态，不再用整宽 RadioButton
-                    // r13fix 第 3 项：去掉行内三个图标按钮，行高压到 ~44dp；点 = 设为当前，长按 = 操作弹层
-                    // r21：行高再压到 ~40dp、行内纵向 padding 2dp，观感更紧
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 40.dp)
-                            .combinedClickable(
-                                onClick = { vm.setWorkflow(wf.id) },
-                                onLongClick = { wfMenu = wf.id to wf.displayName },
-                            )
-                            .padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (isCur) {
-                            Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.White.copy(alpha = 0.22f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                            ) {
-                                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
-                            }
-                            Spacer(Modifier.size(6.dp))
-                        }
-                        Text(
-                            knownText(wf.displayName),
-                            color = ImmersiveInk,
-                            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
+                // r35：内置模板单独一组（只读，可复制后再改）；没有内置时保持原平铺。
+                // 分组标签只在两组并存时画，避免只有一个组时多一行噪音
+                // r38 E3：内置全被删光时也保留组标题 + 「已删除」行，恢复入口不消失
+                val builtins = imported.filter { it.source == BuiltinTemplates.SOURCE }
+                val userWfs = imported.filter { it.source != BuiltinTemplates.SOURCE }
+                if (builtins.isNotEmpty() || deletedBuiltins.isNotEmpty()) {
+                    WfGroupLabel(stringResource(R.string.group_builtin))
+                    builtins.forEach { wf -> WorkflowRow(wf, isCur = s.currentWorkflow == wf.id, onSetCurrent = { vm.setWorkflow(wf.id) }, onMenu = { wfMenu = wf }) }
+                    if (deletedBuiltins.isNotEmpty()) {
+                        DeletedBuiltinsRow(count = deletedBuiltins.size, onClick = { showDeletedBuiltins = true })
                     }
                 }
-                if (imported.isEmpty()) {
+                if (userWfs.isNotEmpty()) {
+                    if (builtins.isNotEmpty() || deletedBuiltins.isNotEmpty()) WfGroupLabel(stringResource(R.string.group_imported))
+                    userWfs.forEach { wf -> WorkflowRow(wf, isCur = s.currentWorkflow == wf.id, onSetCurrent = { vm.setWorkflow(wf.id) }, onMenu = { wfMenu = wf }) }
+                }
+                if (imported.isEmpty() && deletedBuiltins.isEmpty()) {
                     Text(
                         if (vm.wfImporting) stringResource(R.string.state_importing_long) else
                             stringResource(R.string.workflows_empty),
@@ -343,7 +330,18 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
         GlassAlertDialog(
             onDismissRequest = { confirmDeleteWf = null },
             title = { Text(stringResource(R.string.delete_workflow_title)) },
-            text = { Text(stringResource(R.string.delete_workflow_body, knownText(name))) },
+            text = {
+                Column {
+                    // r38：内置名按应用语言显示；条目刚好被并发删掉时退回存盘名
+                    val label = imported.firstOrNull { it.id == id }?.let { workflowLabel(it) } ?: knownText(name)
+                    Text(stringResource(R.string.delete_workflow_body, label))
+                    // 内置模板删了可恢复（r35）
+                    if (imported.any { it.id == id && it.source == BuiltinTemplates.SOURCE }) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.delete_builtin_hint), fontSize = 12.sp, color = ImmersiveInkMuted)
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = { vm.deleteWorkflow(id); confirmDeleteWf = null },
@@ -354,6 +352,42 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { confirmDeleteWf = null }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
+    // r38 E3：恢复被删的内置模板（单个）：列出墓碑里的条目；恢复成功后该行消失，列表空了自动关弹窗。
+    val deletedEntries = BuiltinTemplates.all.filter { it.id in deletedBuiltins }
+    LaunchedEffect(deletedEntries) {
+        if (showDeletedBuiltins && deletedEntries.isEmpty()) showDeletedBuiltins = false
+    }
+    if (showDeletedBuiltins && deletedEntries.isNotEmpty()) {
+        GlassAlertDialog(
+            onDismissRequest = { showDeletedBuiltins = false },
+            title = { Text(stringResource(R.string.deleted_builtins_title)) },
+            text = {
+                Column {
+                    deletedEntries.forEach { t ->
+                        val label = workflowLabel(t)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                vm.restoreBuiltin(t.id) { ok ->
+                                    if (ok) notify(toaster, context, context.str(R.string.restore_builtin_done, label))
+                                }
+                            }) {
+                                Text(stringResource(R.string.action_restore))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showDeletedBuiltins = false }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -387,16 +421,31 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
         )
     }
 
-    // 长按工作流行 → 操作弹层
-    wfMenu?.let { (id, name) ->
+    // 长按工作流行 → 操作弹层（内置只读：复制/删除，没有重命名/分享；导入保持原三动作）
+    wfMenu?.let { wf ->
+        val builtin = wf.source == BuiltinTemplates.SOURCE
         RowActionSheet(
-            title = knownText(name),
+            title = workflowLabel(wf),
             onDismiss = { wfMenu = null },
-            actions = listOf(
-                RowAction(stringResource(R.string.action_rename), Lucide.Pencil) { renameWf = id to name },
-                RowAction(stringResource(R.string.action_share), Lucide.Share2) { vm.exportWorkflow(id) },
-                RowAction(stringResource(R.string.action_delete), Lucide.Trash2, danger = true) { confirmDeleteWf = id to name },
-            ),
+            actions = if (builtin) {
+                listOf(
+                    // r38 E4：不直接落盘复制，先进参数选择页（预填同款勾选），保存后才建副本
+                    RowAction(stringResource(R.string.action_copy_customize), Lucide.Copy) {
+                        nav.push(Overlay.WorkflowCustomize(wf.id, Source.MODE_COPY))
+                    },
+                    RowAction(stringResource(R.string.action_delete), Lucide.Trash2, danger = true) { confirmDeleteWf = wf.id to wf.displayName },
+                )
+            } else {
+                listOf(
+                    // r38 E5：非内置可重选参数（内置只读，要改走「复制并自定义」）
+                    RowAction(stringResource(R.string.action_edit_params), Lucide.SlidersHorizontal) {
+                        nav.push(Overlay.WorkflowCustomize(wf.id, Source.MODE_EDIT))
+                    },
+                    RowAction(stringResource(R.string.action_rename), Lucide.Pencil) { renameWf = wf.id to wf.displayName },
+                    RowAction(stringResource(R.string.action_share), Lucide.Share2) { vm.exportWorkflow(wf.id) },
+                    RowAction(stringResource(R.string.action_delete), Lucide.Trash2, danger = true) { confirmDeleteWf = wf.id to wf.displayName },
+                )
+            },
         )
     }
 
@@ -610,6 +659,83 @@ private class RowAction(
     val danger: Boolean = false,
     val onClick: () -> Unit,
 )
+
+/** r35：工作流分组的行间小标题（「内置」/「导入」）——11sp 浅白，不抢行内文字。 */
+@Composable
+private fun WfGroupLabel(text: String) {
+    Text(
+        text,
+        fontSize = 11.sp,
+        color = ImmersiveInkMuted,
+        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+    )
+}
+
+/** r38 E3：内置分组末尾的「已删除 N 个内置模板 ›」入口行；点开单个恢复弹窗。N=0 不渲染（调用方保证）。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeletedBuiltinsRow(count: Int, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .combinedClickable(onClick = onClick)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.builtin_missing_count, count),
+            color = ImmersiveInk,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(Lucide.ChevronRight, contentDescription = null, tint = ImmersiveInkMuted)
+    }
+}
+
+/**
+ * 工作流列表行（r35 从内联抽出，内置/导入共用）：
+ * 点 = 设为当前，长按 = 操作弹层；行高/徽标样式沿用 r21 的紧凑规格。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkflowRow(
+    wf: ImportedWorkflowMeta,
+    isCur: Boolean,
+    onSetCurrent: () -> Unit,
+    onMenu: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .combinedClickable(onClick = onSetCurrent, onLongClick = onMenu)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isCur) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.White.copy(alpha = 0.22f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.size(6.dp))
+        }
+        Text(
+            workflowLabel(wf),
+            color = ImmersiveInk,
+            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 /** 列表行长按后的操作弹层：标题 + 一列动作（危险操作用浅红）；点动作先关弹层再执行。 */
 @OptIn(ExperimentalMaterial3Api::class)

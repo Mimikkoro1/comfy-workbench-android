@@ -75,6 +75,7 @@ import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.Download
+import com.composables.icons.lucide.Heart
 import com.composables.icons.lucide.Info
 import com.composables.icons.lucide.Library
 import com.composables.icons.lucide.Lucide
@@ -113,6 +114,7 @@ import com.mie.kreaworkbench.util.saveImageIfNeeded
 import com.mie.kreaworkbench.util.shareImage
 import com.mie.kreaworkbench.util.shareVideo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -278,6 +280,30 @@ fun ViewerScreen(
                                 if (saved) Lucide.CircleCheck else Lucide.Download,
                                 if (saved) stringResource(R.string.saved_check) else stringResource(R.string.action_save_album),
                                 tint = PhotoOnBackdrop,
+                            )
+                        }
+                        // 收藏爱心（round34）：图和视频都能收藏；单行写完后 bump 一次 revision，
+                        // 让图库把收藏状态刷新（整批一次 bump 的纪律不变，这里只有一行写）
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        val next = !current.favorite
+                                        withContext(Dispatchers.IO) { app.container.db.setFavorite(current.id, next) }
+                                        rows = rows.map { if (it.id == current.id) it.copy(favorite = next) else it }
+                                        app.container.engine.revision.update { it + 1 }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        notify(toaster, context, e.message ?: e.javaClass.simpleName)
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                Lucide.Heart,
+                                stringResource(if (current.favorite) R.string.gallery_fav_remove else R.string.gallery_fav_add),
+                                tint = if (current.favorite) GlassDanger else PhotoOnBackdrop,
                             )
                         }
                         if (canI2i && current.kind == "image") {

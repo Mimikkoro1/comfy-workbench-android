@@ -73,6 +73,9 @@ import com.mie.kreaworkbench.data.workflows.Specs
 @Composable
 fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
     val wf by nav.workflow.collectAsState()
+    // r38 E6：空状态与生成页一致——按配置进度引导，列当前内置模板
+    val serverReady by nav.serverReady.collectAsState()
+    val builtins by nav.builtins.collectAsState()
     // 切换工作流时设置页跟着切（与生成页同款 bind，boundId 去重）
     LaunchedEffect(wf) { if (wf.isNotBlank()) vm.bind(wf) }
     var confirmRestore by remember { mutableStateOf(false) }
@@ -114,7 +117,15 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
             ) {
                 if (wf.isBlank()) {
                     // 无选中工作流或没有任何导入工作流 → 空状态（压在深色薄遮罩上，白字）
-                    WorkflowEmptyState(onGoImport = { nav.tab = AppTab.WORKFLOWS }, immersive = true)
+                    // r38 E6：与生成页同一份空状态——按配置进度引导，可直接点内置模板
+                    WorkflowEmptyState(
+                        serverReady = serverReady,
+                        builtins = builtins,
+                        onConfigureServer = { nav.openOnboarding() },
+                        onPickWorkflow = { id -> nav.pickWorkflow(id) },
+                        onGoImport = { nav.tab = AppTab.WORKFLOWS },
+                        immersive = true,
+                    )
                 } else {
                     // 顶部当前工作流名（只读，不加切换入口）
                     Text(

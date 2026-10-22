@@ -12,6 +12,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 
 /** 电脑上文字抽卡页的默认地址（示例地址，和 Comfy 默认内网地址同一类）。 */
 const val DEFAULT_ADV_GACHA_URL = "http://192.168.1.100:8787"
@@ -284,13 +285,40 @@ fun correctGachaSelection(
     return GachaSelection(mode = mode, master = master, outfit = outfit, category = category, pool = pool)
 }
 
+/**
+ * r39：只有连接层失败（非 HTTP，code==0）才按「连不上」报；HTTP 5xx 是服务端错误，保留服务端文案。
+ */
+internal fun isGachaTransportFailure(e: ApiException): Boolean = e.code == 0
+
+/**
+ * 服务端错误文本：error.message → error（仅字符串）→ detail（FastAPI 的错误体是 {"detail": "..."}）。
+ * 都没有返回空串，由调用方用本地模板兜底。
+ */
+fun gachaServerErrorText(json: JSONObject): String {
+    val errObj = json.optJSONObject("error")
+    errObj?.optString("message")?.takeIf { it.isNotBlank() }?.let { return it }
+    (json.opt("error") as? String)?.takeIf { it.isNotBlank() }?.let { return it }
+    return json.optString("detail")
+}
+
 /** 不走 Comfy 的 Basic Auth。连不上就抛错，调用方提示，不往 Comfy 重复提交。 */
 class AdvGachaClient(private val ctx: Context) {
     private val http = jsonClient(null)
 
-    /** 一次请求拿全套：母版 + 动态筛选项。别再为 options 单独发请求。 */
-    suspend fun catalog(base: String): GachaCatalog =
-        parseCatalog(request(endpoint(base, "/api/masters"), null))
+    /** 一次请求拿全套：母版 + 动态筛选项。别再为 options 单独发请求。
+     *  r39：只读请求遇连接失败（手机休眠/服务端重启后的死 keep-alive）立即重试 1 次；
+     *  HTTP 4xx/5xx 不重试；draw 绝不重试（避免重复抽）。 */
+    suspend fun catalog(base: String): GachaCatalog {
+        val url = endpoint(base, "/api/masters")
+        try {
+            return parseCatalog(request(url, null))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException) {
+            if (e.network && isGachaTransportFailure(e)) return parseCatalog(request(url, null))
+            throw e
+        }
+    }
 
     suspend fun draw(req: GachaRequest): List<String> {
         val json = request(endpoint(req.base, "/api/draw"), buildAdvDrawBody(req))
@@ -312,7 +340,8 @@ class AdvGachaClient(private val ctx: Context) {
             }
             return interpret(code, text)
         } catch (e: ApiException) {
-            if (e.network || e.code == 0) {
+            // r39：只有连接层失败（code==0）才换「连不上」；HTTP 5xx 保留服务端错误文案，不再被吞掉
+            if (isGachaTransportFailure(e)) {
                 throw ApiException(ctx.str(R.string.err_gacha_unreachable), network = true, code = e.code)
             }
             throw e
@@ -331,10 +360,10 @@ class AdvGachaClient(private val ctx: Context) {
             else -> JSONObject()
         }
         if (code !in 200..299) {
-            val obj = json.optJSONObject("error")
-            val err = obj?.optString("message").orEmpty().ifBlank { json.optString("error") }
+            // r39：错误体除 error/error.message 外也认 detail（FastAPI 风格）；没有才用本地模板
+            val err = gachaServerErrorText(json).ifBlank { ctx.str(R.string.err_gacha_http, code) }
             throw ApiException(
-                err.ifBlank { ctx.str(R.string.err_gacha_http, code) },
+                err,
                 network = code >= 500,
                 code = code,
             )

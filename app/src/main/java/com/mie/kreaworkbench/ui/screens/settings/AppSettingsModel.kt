@@ -7,12 +7,21 @@ import androidx.lifecycle.viewModelScope
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.api.ApiException
+import com.mie.kreaworkbench.data.api.normalizeServerUrl
 import com.mie.kreaworkbench.data.api.trimBase
+import com.mie.kreaworkbench.data.api.trimBase
+import com.mie.kreaworkbench.data.discovery.LanHit
+import com.mie.kreaworkbench.data.discovery.LanScanner
+import com.mie.kreaworkbench.data.discovery.ScanEvent
+import com.mie.kreaworkbench.data.discovery.hostsToScan
+import com.mie.kreaworkbench.data.discovery.intToIpv4
+import com.mie.kreaworkbench.data.discovery.lanHitIpKey
 import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
 import com.mie.kreaworkbench.data.settings.ServerHistoryEntry
 import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.ui.locale.str
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -102,20 +111,26 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     fun testGacha(onSuccess: () -> Unit = {}) {
         val app = getApplication<Application>()
         viewModelScope.launch {
-            val target = trimBase(gachaUrl.value).ifBlank { DEFAULT_ADV_GACHA_URL }
+            // 只在点「测试连接」时才碰网络。先规范化，格式不对就地提示、不动已输入内容。
+            val target = normalizeServerUrl(gachaUrl.value)
+            if (target == null) {
+                gachaPing.value = app.str(R.string.err_gacha_bad_url)
+                return@launch
+            }
             gachaUrl.value = target
             gachaBusy.value = true
             gachaLatency.value = -1L
             gachaPing.value = app.str(R.string.ping_connecting)
             try {
                 val ms = withTimeout(20_000L) {
-                    c.settings.update { cur ->
-                        val hist = listOf(target) + cur.advGachaHistory.filter { it != target }
-                        cur.copy(advGachaUrl = target, advGachaHistory = hist.take(8))
-                    }
                     val t = System.nanoTime()
                     c.gacha.catalog(target)
                     (System.nanoTime() - t) / 1_000_000
+                }
+                // 连上了才落库并记进最近地址
+                c.settings.update { cur ->
+                    val hist = listOf(target) + cur.advGachaHistory.filter { it != target }
+                    cur.copy(advGachaUrl = target, advGachaHistory = hist.take(8))
                 }
                 gachaLatency.value = ms
                 gachaPing.value = app.str(R.string.gacha_latency, ms.toInt())
@@ -161,8 +176,11 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     /** 把当前表单存成一套服务器配置（名称可选；同地址覆盖凭据，空名称保留旧名）。 */
     fun saveServer(onDone: () -> Unit = {}) = viewModelScope.launch {
         val previous = c.settings.current().serverUrl
+        // 存配置也走规范化；解析不过保留原文，行为与旧版一致
+        val normalized = normalizeServerUrl(url.value) ?: url.value.trim()
+        url.value = normalized
         c.settings.saveServer(
-            ServerHistoryEntry(url.value.trim(), user.value.trim(), pass.value, name.value.trim()),
+            ServerHistoryEntry(normalized, user.value.trim(), pass.value, name.value.trim()),
         )
         saveNow()
         cancelFinishedOnServerSwitch(previous)
@@ -188,19 +206,27 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     fun test(onSuccess: () -> Unit = {}) {
         val app = getApplication<Application>()
         viewModelScope.launch {
-            val target = url.value.trim()
-            if (target.isBlank()) {
+            if (url.value.isBlank()) {
                 ping.value = app.str(R.string.ping_need_server)
                 return@launch
             }
+            // 只在点「测试连接」时才碰网络。先把输入规范化（全角转半角、补 scheme），
+            // 格式不对就地提示，已输入内容不动。
+            val target = normalizeServerUrl(url.value)
+            if (target == null) {
+                ping.value = app.str(R.string.err_bad_server_url)
+                return@launch
+            }
+            url.value = target
             val previous = c.settings.current().serverUrl
             busy.value = true
             ping.value = app.str(R.string.ping_connecting)
             try {
                 val r = withTimeout(65_000L) {
-                    saveNow()
                     c.api.ping(target, user.value.trim(), pass.value)
                 }
+                // 连上了才落库：输入过程和测试失败都不写设置，输一半不会触发重连
+                saveNow()
                 ping.value = app.str(R.string.ping_latency, r.workbenchVersion, r.latencyMs)
                 serverVersion.value = r.workbenchVersion
                 serverLatency.value = r.latencyMs
@@ -248,10 +274,96 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
         onDone()
     }
 
+    /** 当前收藏数量（清缓存确认文案用，round34）。 */
+    suspend fun favoriteCount(): Int = withContext(Dispatchers.IO) { c.db.favoriteCount() }
+
     fun refreshUsage() {
         viewModelScope.launch {
             usage.value = withContext(Dispatchers.IO) { c.cache.usedBytes() }
             usageLoaded.value = true
         }
+    }
+
+    // ---- r39：局域网自动查找（扫描协程与弹窗状态都在这里，离开页面由 ConnectionPage 取消） ----
+
+    /** 扫描弹窗状态；null = 弹窗关着。 */
+    var scan = mutableStateOf<ScanUi?>(null)
+        private set
+
+    /** 一次扫描会话的 UI 状态。hits 按 IP 数值排序、按 url 去重。 */
+    data class ScanUi(
+        val kind: LanHit.Kind,
+        val subnet: String,
+        val total: Int,
+        val done: Int = 0,
+        val hits: List<LanHit> = emptyList(),
+        val finished: Boolean = false,
+    )
+
+    private var scanJob: Job? = null
+    private val scanner = LanScanner()
+
+    /** 开始扫描本机网段。不在 Wi-Fi/以太网时（按钮置灰的清形）直接不开弹窗。 */
+    fun startScan(kind: LanHit.Kind) {
+        scanJob?.cancel()
+        scanJob = viewModelScope.launch {
+            val app = getApplication<Application>()
+            val seg = LanScanner.lanSegment(app) ?: return@launch
+            val (selfIp, prefix) = seg
+            val p = prefix.coerceIn(24, 32)
+            val mask = -1 shl (32 - p)
+            val subnet = intToIpv4(selfIp and mask).substringBeforeLast('.')
+            val s = c.settings.current()
+            // 探测端口：默认端口 + 当前配置里的自定义端口（最多各加 1 个）
+            val comfyPorts = buildList {
+                add(8188)
+                LanScanner.customPort(s.serverUrl, 8188)?.let { add(it) }
+            }
+            val gachaPorts = buildList {
+                add(8787)
+                LanScanner.customPort(s.advGachaUrl, 8787)?.let { add(it) }
+            }
+            val total = hostsToScan(selfIp, prefix).size * (comfyPorts.size + gachaPorts.size)
+            scan.value = ScanUi(kind = kind, subnet = subnet, total = total)
+            try {
+                scanner.scan(selfIp, prefix, comfyPorts, gachaPorts).collect { ev ->
+                    when (ev) {
+                        is ScanEvent.Progress -> scan.value = scan.value?.copy(done = ev.done)
+                        is ScanEvent.Found -> {
+                            // 弹窗只显示自己对应的服务；另一个 kind 的事件丢弃
+                            if (ev.hit.kind != kind) return@collect
+                            scan.value = scan.value?.copy(
+                                hits = (scan.value?.hits.orEmpty() + ev.hit)
+                                    .distinctBy { it.url }
+                                    .sortedWith(compareBy({ lanHitIpKey(it.url) }, { it.url })),
+                            )
+                        }
+                        ScanEvent.Finished -> scan.value = scan.value?.copy(finished = true)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            }
+        }
+    }
+
+    /** 关弹窗并停扫描。 */
+    fun cancelScan() {
+        scanJob?.cancel()
+        scanJob = null
+        scan.value = null
+    }
+
+    /** 点一条扫描结果：只填输入框并提示，不自动测试、不保存（D3：测试连接成功才保存）。 */
+    fun pickScanHit(hit: LanHit) {
+        val app = getApplication<Application>()
+        if (hit.kind == LanHit.Kind.COMFY) {
+            url.value = hit.url
+            ping.value = app.str(R.string.scan_filled_hint)
+        } else {
+            editGachaUrl(hit.url)
+            gachaPing.value = app.str(R.string.scan_filled_hint)
+        }
+        cancelScan()
     }
 }

@@ -65,6 +65,8 @@ data class UserSettings(
     val currentWorkflow: String = "",
     /** vivo 忽略电池优化的一次性引导只弹一次。 */
     val batteryHintShown: Boolean = false,
+    /** 快速开始引导：点「开始使用」或配好服务器地址后置 true，不再自动弹出。 */
+    val onboarded: Boolean = false,
     /** 高级抽卡。关掉时生成页仍是本地库抽卡。 */
     val advGacha: Boolean = false,
     val advGachaUrl: String = DEFAULT_ADV_GACHA_URL,
@@ -114,6 +116,7 @@ class SettingsStore(private val context: Context) {
     private val kBlur = booleanPreferencesKey("blur")
     private val kWorkflow = stringPreferencesKey("current_workflow")
     private val kBatteryHint = booleanPreferencesKey("battery_hint")
+    private val kOnboarded = booleanPreferencesKey("onboarded")
     private val kAdv = booleanPreferencesKey("adv_gacha")
     private val kAdvUrl = stringPreferencesKey("adv_gacha_url")
     private val kAdvHide = booleanPreferencesKey("adv_gacha_hide_prompt")
@@ -170,6 +173,7 @@ class SettingsStore(private val context: Context) {
             blurEnabled = p[kBlur] ?: true,
             currentWorkflow = p[kWorkflow] ?: "",
             batteryHintShown = p[kBatteryHint] ?: false,
+            onboarded = p[kOnboarded] ?: false,
             advGacha = p[kAdv] ?: false,
             advGachaUrl = p[kAdvUrl] ?: DEFAULT_ADV_GACHA_URL,
             advGachaHidePrompt = p[kAdvHide] ?: false,
@@ -318,6 +322,7 @@ class SettingsStore(private val context: Context) {
             p[kBlur] = next.blurEnabled
             p[kWorkflow] = next.currentWorkflow
             p[kBatteryHint] = next.batteryHintShown
+            p[kOnboarded] = next.onboarded
             p[kAdv] = next.advGacha
             p[kAdvUrl] = next.advGachaUrl
             p[kAdvHide] = next.advGachaHidePrompt

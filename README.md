@@ -1,31 +1,32 @@
 # Comfy工作台（Comfy Workbench）
 
-> 导入一条工作流，手机上点一下出图。不连线，不改节点。
+> 装上、连上你的 ComfyUI、挑一个内置模板，手机上点一下出图。不连线，不改节点。
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE) [![Android CI](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml)
 
 国内访问 GitHub 不稳定的话，可以看 Gitee 镜像：[gitee.com/Mimikkoro1/comfy-workbench-android](https://gitee.com/Mimikkoro1/comfy-workbench-android)（代码同步，APK 以 GitHub Releases 为准）。
 
-**Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。电脑上把 ComfyUI 工作流导出成 API 格式，手机里导入，参数变成几个输入框：提示词、种子、尺寸、参考图、一条参考视频。点一下就提交到你自己的 ComfyUI。
+**Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。自带 6 个内置模板，开箱就能出图；也可以把自己的 ComfyUI 工作流导出成 API 格式导进来。参数变成几个输入框：提示词、种子、尺寸、参考图、一条参考视频。点一下就提交到你自己的 ComfyUI。
 
 它不是手机上的节点编辑器，也不替代 ComfyUI 网页端。节点和连线留在电脑上，手机只负责出图。
 
 人不在电脑前，也能用同一套已经调好的工作流出图、图生图、图生视频、反推提示词。
 
-## v0.3.0 新在哪
+## v0.4.0 新在哪
 
-- **毛玻璃沉浸式界面**：最新一张图铺满做背景，生成、工作流/库、模型、设置、看图、图库都换成玻璃卡片。底部面板滑入滑出、跟手下拉回弹，弹窗淡入淡出。Android 12 以下或关掉模糊时自动退成半透明
-- **多台服务器**：可以存好几台 ComfyUI（各带名称和账号密码），地址栏下拉一点就切
-- **取消和报错更靠谱**：生成按钮上直接显示百分比；点按看队列，长按取消当前这条。服务器连不上时立刻报错，不会一直「生成中」；切换地址会自动收掉旧任务；设置 → 连接里有「强制结束全部任务」兜底。弱网下已经提交的任务照样能取回结果
-- **文本结果留在主页**：反推提示词这类只出文字的工作流，结果直接显示在生成页，可复制、可存进提示词库
-- **看图页重新生成**：用这张图的提示词再来一张（种子随机）；图片信息里的提示词可一键入库
-- **高级抽卡（可选）**：连上电脑上的 [gacha-server-lite](https://github.com/Mimikkoro1/gacha-server-lite)，从你的词库随机拼人物、服装、姿势。筛选项由服务端下发，服务端没有的维度不显示。见下方「进阶：高级抽卡服务」
+- **内置 6 个模板**：Krea2 文生图 / 图生图、Qwen 2.1 文生图 / 图片编辑、Z-Image 文生图、Moss 文生图，模型名预填官方默认文件名，装了官方模型不用导入就能出图
+- **快速开始引导**：首次打开两步走完——连服务器、挑模板。跳过也行，之后在「设置 › 关于」里能重新打开
+- **局域网自动查找**：同一个 Wi-Fi 下一键扫出电脑上的 ComfyUI 和抽卡服务，点一下填入地址
+- **图库收藏**：点心收藏，清缓存时收藏的图会保留，可只看收藏
+- **模板更好管**：删掉的内置模板可以单个恢复；内置模板「复制并自定义」；导入的工作流能重新选择要显示的参数，不用删了重导
+- **高级抽卡更稳**：选好的筛选项不再被重置，偶发的「连不上」误报少了很多
+- **服务器地址只在「测试连接」成功后保存**，输错不会把能用的地址冲掉
 
 ## 它做什么
 
 - **直连你的 ComfyUI**：HTTP + WebSocket，实时进度，没有云端中转。提示词、参数、图片只经过手机和你自己的机器
 - **断线任务还在**：提交前先落库。进度条可以断，任务以队列和历史为准，重连后继续查，不靠那条 WebSocket 活着
-- **工作流变操作面板**：导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图映射成手机控件。提示词识别 CLIPTextEncode 和 Qwen 等 TextEncode 节点；内置 11 个尺寸预设（含 9:16 竖屏）。示例在 `docs/example-workflows/`
+- **工作流变操作面板**：自带 6 个内置模板；也可导入 API 格式 JSON，把提示词、尺寸、步数、种子、模型、参考图映射成手机控件，导入后还能重新选择显示哪些参数。提示词识别 CLIPTextEncode 和 Qwen 等 TextEncode 节点；内置 11 个尺寸预设（含 9:16 竖屏）
 - **LoRA 与参考视频**：工作流里的 LoRA 加载器可在手机上开关、调强度；带视频上传槽的工作流可以选一段视频当参考
 - **文本结果**：反推提示词等文字输出直接显示在生成页，可复制、存入提示词库
 - **提示词库**：分类取词、随机抽卡、保存和编辑
@@ -39,7 +40,7 @@
 ## 它不做什么
 
 - 不能在手机上连线、改节点、搭新图。要改结构，回 ComfyUI 网页端改完再导出
-- 只吃 **API 格式** JSON。网页端默认的 `nodes` / `links` 工作流要先用「Export (API)」导出
+- 导入自己的工作流只吃 **API 格式** JSON。网页端默认的 `nodes` / `links` 工作流要先用「Export (API)」导出（用内置模板不需要这一步）
 - 参考视频只支持一条。多条视频槽导入时会拦住
 - 面板控件来自工作流里的字面量参数。已经连到别的节点的输入不会再暴露出来
 - 自定义尺寸会按 16 的倍数对齐（最小 64）。不是 16 的倍数会被改小
@@ -64,9 +65,12 @@
 > Android 8.0 及以上。Release APK 为 arm64-v8a / armeabi-v7a / x86 / x86_64 通用包。
 
 1. 电脑上启动 ComfyUI 时加 `--listen 0.0.0.0`（只听 127.0.0.1 的话手机连不上），防火墙放行 8188
-2. **同一个 Wi-Fi 直接就能连**：手机和电脑连同一个 Wi-Fi，App 里填 `http://<电脑局域网IP>:8188`（Windows 用 `ipconfig` 看 IPv4，例如 `http://192.168.1.100:8188`）。不用装蒲公英，也不用折腾 IPv6 / DDNS，下面的「远程访问」是出门在外才用的
-3. 从 Releases 安装 APK，填地址，连上就能用
-4. 在「工作流/库」导入一条 **API 格式** 工作流：ComfyUI 网页端菜单「工作流」（新版叫「文件」）→「导出 (API)」。普通保存的界面格式导入时会被拦下，并提示改用「导出 (API)」
+2. 从 Releases 安装 APK。首次打开会进入「快速开始」引导
+3. **连服务器**：手机和电脑连同一个 Wi-Fi，点「自动查找」扫出电脑上的 ComfyUI，点一下填入，再点「测试连接」。扫不到就手动填 `http://<电脑局域网IP>:8188`（Windows 用 `ipconfig` 看 IPv4，例如 `http://192.168.1.100:8188`）。不用装蒲公英，也不用折腾 IPv6 / DDNS，下面的「远程访问」是出门在外才用的
+4. **挑模板**：从 6 个内置模板里选一个（Krea2 文生图 / 图生图、Qwen 2.1 文生图 / 图片编辑、Z-Image 文生图、Moss 文生图）。模型名已预填官方默认文件名，电脑上装了对应官方模型就不用改；文件名不一样的话到「模型」页挑一下
+5. 写提示词，点生成
+
+想用自己的工作流？见下方「自定义工作流（进阶）」。
 
 ## 远程访问
 
@@ -83,16 +87,13 @@
 
 家里一个地址、外面一个地址的话，两个都存成服务器，出门前在地址栏下拉里切一下就行。
 
-## 自定义工作流
+## 自定义工作流（进阶）
 
-在 ComfyUI 网页端用「导出 (API)」/ Export (API) 导出 JSON（不是普通保存的界面格式），再到应用里导入。导入普通保存的界面格式时，App 会拦下并提示改用「导出 (API)」。`docs/example-workflows/` 里有四条能直接对一下格式的例子：
+内置模板不够用时再看这节。在 ComfyUI 网页端菜单「工作流」（新版叫「文件」）→「导出 (API)」/ Export (API) 导出 JSON（不是普通保存的界面格式），再到「工作流/库」导入。导入普通保存的界面格式时，App 会拦下并提示改用「导出 (API)」。导入时可以勾选要在手机上显示哪些参数，之后在工作流菜单里「编辑参数」随时改。
 
-- `kr2turbo_t2i.workflow.json` — 文生图（Krea 2 Turbo）
-- `kr2turbo_i2i.workflow.json` — 图生图
-- `wan22_i2v_4step.workflow.json` — 图生视频（Wan2.2，4 步）
-- `florence2_caption.workflow.json` — Florence-2 图片反推提示词
+想在内置模板基础上改？在内置模板菜单里点「复制并自定义」。
 
-示例里的模型名要换成你机器上实际有的文件。工作流引用的模型、节点包，都得在 ComfyUI 那台机器上先装好。
+工作流引用的模型、节点包，都得在 ComfyUI 那台机器上先装好。
 
 ## 进阶：高级抽卡服务
 
@@ -135,11 +136,11 @@ gradlew.bat assembleRelease
 
 ## FAQ
 
-**连不上服务器？** ComfyUI 要用 `--listen` 听 `0.0.0.0`。只听 `127.0.0.1` 时手机进不去。防火墙放行 8188。先用手机浏览器打开 `http://<ip>:8188` 看通不通。
+**连不上服务器 / 自动查找扫不到？** ComfyUI 要用 `--listen` 听 `0.0.0.0`。只听 `127.0.0.1` 时手机进不去。防火墙放行 8188。访客网络、路由器 AP 隔离、手机开着 VPN 都可能扫不到。先用手机浏览器打开 `http://<ip>:8188` 看通不通。
 
 **高级抽卡连不上？** 确认电脑上 `start.bat` 的窗口还开着，地址带 `http://`、结尾不要加 `/api/...`，防火墙放行 8787。电脑浏览器打开 `http://127.0.0.1:8787/api/masters` 能看到 JSON，说明服务本身正常。
 
-**支持哪些模型？** 应用不绑模型。你导入的工作流用什么，它就跑什么。
+**支持哪些模型？** 内置模板覆盖 Krea2、Qwen 2.1、Z-Image、Moss。除此之外应用不绑模型，你导入的工作流用什么，它就跑什么。
 
 **会把图片传到云端吗？** 不会。流量只在手机和你的 ComfyUI 之间。
 
@@ -157,32 +158,37 @@ gradlew.bat assembleRelease
 
 ## English
 
-**Comfy Workbench** is a native Android app for a workflow you already finished on your PC. Export it as API-format JSON, import it on the phone, and the parameters become a few fields: prompt, seed, size, reference image, or one reference video. Tap once. It submits to your own ComfyUI over HTTP + WebSocket. No cloud in between.
+**Comfy Workbench** is a native Android app that drives your own ComfyUI. It ships with 6 built-in templates, so you can generate right after install; you can also export your own workflow as API-format JSON and import it. The parameters become a few fields: prompt, seed, size, reference image, or one reference video. Tap once. It submits to your own ComfyUI over HTTP + WebSocket. No cloud in between.
 
 It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay on the computer. The phone only runs them.
 
 **Quick start (same Wi-Fi, nothing else to install)**
 
 1. Start ComfyUI with `--listen 0.0.0.0` (if it only listens on 127.0.0.1 the phone can't reach it) and allow port 8188 through the firewall
-2. Put the phone on the same Wi-Fi, install the APK from Releases, and enter `http://<PC LAN IP>:8188` (find the IPv4 with `ipconfig`, e.g. `http://192.168.1.100:8188`)
-3. Import an **API-format** workflow: in the ComfyUI web UI, Workflow menu (File in newer versions) → Export (API). A regular saved workflow is rejected with a hint to re-export
+2. Install the APK from Releases. The Quick Start guide opens on first launch
+3. Connect: with the phone on the same Wi-Fi, tap "Find on network" to discover ComfyUI, tap the result, then "Test connection". Or enter `http://<PC LAN IP>:8188` by hand (find the IPv4 with `ipconfig`, e.g. `http://192.168.1.100:8188`)
+4. Pick one of 6 built-in templates (Krea2 text-to-image / image-to-image, Qwen 2.1 text-to-image / image edit, Z-Image text-to-image, Moss text-to-image). Official default model file names are prefilled; pick other files on the Models tab if yours differ
+5. Write a prompt and generate
+
+Your own workflow (advanced): ComfyUI web UI, Workflow menu (File in newer versions) → Export (API), then import it under Workflows. A regular saved workflow is rejected with a hint to re-export. You choose which parameters to show and can edit that later; built-in templates can be "Copied & customized".
 
 Remote access (Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from home.
 
-**New in v0.3.0**
+**New in v0.4.0**
 
-- Frosted-glass immersive UI: your latest image fills the background, and every screen uses glass cards. Bottom sheets slide in and out and follow your finger; dialogs fade. Falls back to translucent panels below Android 12 or with blur turned off
-- Several saved ComfyUI servers, each with its own name and login, switched from the address dropdown
-- Reliable cancel: percentage progress on the Generate button, tap for the queue, long-press to cancel the current job. An unreachable server fails right away instead of spinning forever; switching servers ends the old jobs; Settings → Connection has "Force-cancel all tasks". Jobs already submitted still come back on a flaky network
-- Text-only workflows such as prompt captioning show their result on the Generate screen, with copy and save-to-library
-- Regenerate from the viewer (same prompt, random seed); save an image's prompt to a library in one tap
-- Optional advanced gacha via [gacha-server-lite](https://github.com/Mimikkoro1/gacha-server-lite): the server sends the filter options, and dimensions it doesn't have are hidden
+- 6 built-in templates (Krea2 T2I / I2I, Qwen 2.1 T2I / Edit, Z-Image T2I, Moss T2I) with official default model names prefilled
+- Quick Start guide: connect a server, pick a template. Reopen it any time from Settings › About
+- LAN auto-discovery finds ComfyUI and the gacha server on the same Wi-Fi
+- Gallery favorites, kept when clearing the cache
+- Restore deleted built-in templates one by one, "Copy & customize" built-ins, and re-pick parameters of imported workflows
+- Advanced gacha keeps your filter choices and reports far fewer false "can't connect" errors
+- Server addresses are saved only after "Test connection" succeeds
 
 **What it does and doesn't do**
 
 - A dropped connection does not drop the job. The task is stored before submit; progress may disconnect, and status comes from the queue and history
 - Prompts are detected on CLIPTextEncode and TextEncode-style nodes such as Qwen; 11 built-in size presets including 9:16
-- API-format workflows only. The default `nodes` / `links` file must be exported with Export (API) first
+- Imported workflows must be API format. The default `nodes` / `links` file must be exported with Export (API) first (not needed for built-in templates)
 - LoRA loaders can be toggled and weighted on the phone; workflows with a video upload slot accept a reference video
 - One reference video. Imports with more than one video slot are rejected
 - Linked inputs are not exposed. Only literal parameters become controls
@@ -194,7 +200,7 @@ Remote access (Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from hom
 - Chinese and English UI, following the system language unless you switch it
 - Update check asks GitHub at most once a day, or manually from About. No auto-download, no data collected
 
-Examples: `docs/example-workflows/` (Krea 2 Turbo t2i / i2i, Wan2.2 i2v, Florence-2 caption). Model files named in those workflows must exist on your ComfyUI machine.
+Model files and custom nodes used by a workflow must exist on your ComfyUI machine.
 
 Remote access (optional, only away from home): on mainland China, Oray Pgyer (蒲公英) is the simplest mesh. Public IPv6 + DDNS with a Caddy / Nginx reverse proxy and Basic Auth also works; open only the proxy port, never 8188 itself. Tailscale is fine outside China and can be unstable on the mainland. Plain HTTP on an untrusted network should go through a tunnel.
 

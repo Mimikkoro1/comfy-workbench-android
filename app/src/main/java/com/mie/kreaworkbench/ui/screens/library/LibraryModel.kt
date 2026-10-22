@@ -54,6 +54,9 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     val currentId = c.library.currentId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null as String?)
     val imported = c.workflowStore.workflows
 
+    /** r38 E3：被删内置模板的墓碑集合（库页「已删除的内置模板」行与恢复弹窗）。 */
+    val deletedBuiltins = c.workflowStore.deletedBuiltinsFlow
+
     var importing by mutableStateOf(false)
         private set
     var result by mutableStateOf<ImportResult?>(null)
@@ -188,6 +191,11 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
 
     fun renameWorkflow(id: String, name: String) {
         viewModelScope.launch { c.workflowStore.rename(id, name) }
+    }
+
+    /** r38 E3：单个恢复被删的内置模板；onDone 主线程回调，true = 恢复成功（供 toast）。 */
+    fun restoreBuiltin(id: String, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch { onDone(c.workflowStore.restoreBuiltin(id)) }
     }
 
     /** 库重命名（round13 第 3 项）。ok=false（库已删/名为空）时静默，UI 已先行校验。 */

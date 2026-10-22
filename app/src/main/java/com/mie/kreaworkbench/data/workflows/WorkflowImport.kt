@@ -33,11 +33,15 @@ fun classifyFile(name: String, text: String): Pair<FileKind, JSONObject> {
     }
     return when {
         json.has("user_facing_inputs") && json.optJSONArray("user_facing_inputs") != null -> FileKind.DEFINITION to json
-        json.has("nodes") && json.has("links") -> FileKind.UI_WORKFLOW to json
+        isUiWorkflow(json) -> FileKind.UI_WORKFLOW to json
         isApiWorkflow(json) -> FileKind.API_WORKFLOW to json
         else -> FileKind.UNKNOWN to json
     }
 }
+
+/** ComfyUI 普通保存的「界面格式」：顶层 nodes 是数组，并且带 links 或 last_node_id。 */
+fun isUiWorkflow(json: JSONObject): Boolean =
+    json.optJSONArray("nodes") != null && (json.has("links") || json.has("last_node_id"))
 
 /** API 格式工作流：顶层对象，至少一个值是带 class_type 和 inputs 的对象。 */
 fun isApiWorkflow(json: JSONObject): Boolean {

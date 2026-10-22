@@ -70,4 +70,19 @@ class CacheEvictionTest {
         // 200 -> <=150：只删最旧一条
         assertEquals(listOf(1L), evictionVictims(rows, totalBytes = 200, limit = 150).map { it.id })
     }
+
+    @Test
+    fun `favorited rows are never selected for eviction`() {
+        // 第 1、3 张已收藏：跳过它们，只删未收藏的旧图
+        val rows = listOf(row(1, 100).copy(favorite = true), row(2, 100), row(3, 100).copy(favorite = true), row(4, 100))
+        val victims = evictionVictims(rows, totalBytes = 400, limit = 150)
+        assertEquals(listOf(2L, 4L), victims.map { it.id })
+    }
+
+    @Test
+    fun `all favorited means no victims even over the limit`() {
+        // 全部已收藏：宁可超限也不能动收藏（round34）
+        val rows = listOf(row(1, 100).copy(favorite = true), row(2, 100).copy(favorite = true))
+        assertTrue(evictionVictims(rows, totalBytes = 200, limit = 50).isEmpty())
+    }
 }

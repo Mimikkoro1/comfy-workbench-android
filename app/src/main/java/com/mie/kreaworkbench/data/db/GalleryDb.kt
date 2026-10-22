@@ -41,9 +41,10 @@ data class ImageRow(
     val albumUri: String,
     val kind: String = "image", // image | video | text（round6）
     val text: String = "",      // kind=="text" 的正文
+    val favorite: Boolean = false, // 收藏标记（round34）：只存本机，清缓存/容量淘汰时保留
 )
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "krea_gallery.db", null, 4) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "krea_gallery.db", null, 5) {
 
     init {
         // round19：开 WAL（治本）。
@@ -120,7 +121,8 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "krea_gallery.db",
                 saved_to_album INTEGER DEFAULT 0,
                 album_uri TEXT,
                 kind TEXT DEFAULT 'image',
-                text TEXT DEFAULT ''
+                text TEXT DEFAULT '',
+                favorite INTEGER DEFAULT 0
             )""",
         )
         db.execSQL("CREATE INDEX idx_images_created ON images(created_at)")
@@ -133,6 +135,12 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "krea_gallery.db",
         if (oldVersion < 2) createTombstones(db)
         if (oldVersion < 3) upgradeTo3(db)
         if (oldVersion < 4) upgradeTo4(db)
+        if (oldVersion < 5) upgradeTo5(db)
+    }
+
+    /** v5（round34）：images 加 favorite 列——图库收藏标记，清缓存/淘汰时保留。 */
+    private fun upgradeTo5(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE images ADD COLUMN favorite INTEGER DEFAULT 0")
     }
 
     /**
@@ -367,6 +375,20 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "krea_gallery.db",
         write { it.update("images", cv, "id=?", arrayOf(id.toString())) }
     }
 
+    /** 收藏开关（round34）：只改一行。不动 revision——收藏不需要唤醒任何全表读观察者。 */
+    fun setFavorite(id: Long, favorite: Boolean) {
+        val cv = ContentValues().apply { put("favorite", if (favorite) 1 else 0) }
+        write { it.update("images", cv, "id=?", arrayOf(id.toString())) }
+    }
+
+    /** 当前收藏的行数（清缓存确认文案用）。 */
+    fun favoriteCount(): Int = read { db ->
+        db.rawQuery("SELECT COUNT(*) FROM images WHERE favorite=1", null).use { c ->
+            c.moveToFirst()
+            c.getInt(0)
+        }
+    }
+
     // round18：删掉 deleteImages / deleteAllImages 两个「删行不留墓碑」的入口。
     // 它们是「重启后 App 变慢」的根因：needsWork 靠
     // 「jobs.done > 图片行数 + 墓碑数」判断任务是否还有产物没拿全，
@@ -487,4 +509,5 @@ private fun android.database.Cursor.toImage() = ImageRow(
     albumUri = getString(16).orEmpty(),
     kind = getString(17)?.ifBlank { "image" } ?: "image",
     text = getString(18).orEmpty(),
+    favorite = getInt(19) == 1,
 )

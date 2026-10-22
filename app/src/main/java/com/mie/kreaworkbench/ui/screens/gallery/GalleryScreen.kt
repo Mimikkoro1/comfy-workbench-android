@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -67,6 +69,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.composables.icons.lucide.Download
+import com.composables.icons.lucide.Heart
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Trash2
 import com.mie.kreaworkbench.KreaApp
@@ -180,6 +183,22 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 收藏/取消收藏（round34）：写一行库 + 就地改内存列表。
+     * 不 bump revision——收藏不需要唤醒任何全表读观察者；查看页里的收藏才 bump（那里要同步图库）。
+     */
+    fun setFavorite(id: Long, favorite: Boolean) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { c.db.setFavorite(id, favorite) }
+                images = images.map { if (it.id == id) it.copy(favorite = favorite) else it }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Log.e(TAG, "setFavorite failed", t)
+            }
+        }
+    }
+
     fun delete(ids: List<Long>, toast: (String) -> Unit, done: () -> Unit) {
         val app = getApplication<KreaApp>()
         viewModelScope.launch {
@@ -224,12 +243,13 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
     var confirm by remember { mutableStateOf(false) }
     var cache by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
-    // 三档分类（direct12）：全部 / 图片 / 视频；文本行本来就不进画廊
+    // 四档分类：全部 / 图片 / 视频 / 收藏（round34）；文本行本来就不进画廊
     var filter by rememberSaveable { mutableStateOf("all") }
     val filtered = remember(vm.images, filter) {
         when (filter) {
             "image" -> vm.images.filter { it.kind == "image" }
             "video" -> vm.images.filter { it.kind == "video" }
+            "fav" -> vm.images.filter { it.favorite }
             else -> vm.images
         }
     }
@@ -278,11 +298,12 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                     FilterChip(selected = filter == "all", onClick = { filter = "all" }, label = { Text(stringResource(R.string.label_all)) }, colors = glassChipColors())
                     FilterChip(selected = filter == "image", onClick = { filter = "image" }, label = { Text(stringResource(R.string.label_images)) }, colors = glassChipColors())
                     FilterChip(selected = filter == "video", onClick = { filter = "video" }, label = { Text(stringResource(R.string.label_videos)) }, colors = glassChipColors())
+                    FilterChip(selected = filter == "fav", onClick = { filter = "fav" }, label = { Text(stringResource(R.string.label_favorites)) }, colors = glassChipColors())
                 }
                 AnimatedContent(targetState = filtered.isEmpty(), label = "gallery-body") { empty ->
                     if (empty) {
                         Text(
-                            stringResource(R.string.gallery_empty),
+                            if (filter == "fav") stringResource(R.string.gallery_empty_favorites) else stringResource(R.string.gallery_empty),
                             modifier = Modifier.padding(20.dp),
                             color = ImmersiveInkMuted,
                         )
@@ -325,6 +346,7 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
                                                         }
                                                     },
                                                     onLong = { selected = selected + img.id },
+                                                    onFavorite = { vm.setFavorite(img.id, !img.favorite) },
                                                 )
                                             }
                                             repeat(3 - chunk.size) { Spacer(Modifier.weight(1f)) }
@@ -406,6 +428,7 @@ private fun Cell(
     modifier: Modifier,
     onClick: () -> Unit,
     onLong: () -> Unit,
+    onFavorite: () -> Unit,
 ) {
     val press = remember { MutableInteractionSource() }
     Box(
@@ -432,6 +455,25 @@ private fun Cell(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+        if (!selecting) {
+            // 收藏爱心（round34）：右上角暗底小圆片，沿用查看页玻璃条的深色玻璃语言；
+            // 收藏后换暖红，空心/实心两态，不弹窗
+            IconButton(
+                onClick = onFavorite,
+                modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
+            ) {
+                Icon(
+                    Lucide.Heart,
+                    contentDescription = stringResource(if (img.favorite) R.string.gallery_fav_remove else R.string.gallery_fav_add),
+                    tint = if (img.favorite) GlassDanger else ImmersiveInk,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .padding(6.dp),
+                )
+            }
         }
         if (selecting) {
             Checkbox(

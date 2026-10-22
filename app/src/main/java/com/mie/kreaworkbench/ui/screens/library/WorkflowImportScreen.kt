@@ -59,11 +59,14 @@ import com.mie.kreaworkbench.ui.components.ImmersiveHairline
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LargeBarScaffold
+import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.glassCheckboxColors
 import com.mie.kreaworkbench.ui.components.glassTextFieldColors
 import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
 import com.mie.kreaworkbench.ui.components.immersiveGlass
+import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.locale.knownText
+import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import org.json.JSONObject
 
@@ -106,15 +109,30 @@ private fun GlassPrimaryButton(text: String, enabled: Boolean, onClick: () -> Un
 }
 
 @Composable
-fun WorkflowImportScreen(uris: List<Uri>, onBack: () -> Unit) {
+fun WorkflowImportScreen(uris: List<Uri>, onBack: () -> Unit) =
+    WorkflowImportScreen(source = Source.Uris(uris), onBack = onBack)
+
+/** r38 E4/E5：[Source.Stored] 版（复制并自定义 / 编辑参数）与文件导入共用同一页。 */
+@Composable
+fun WorkflowImportScreen(source: Source, onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as Application
-    val m = remember(uris) { WorkflowImportModel(app, uris) }
+    val m = remember(source) { WorkflowImportModel(app, source) }
     // 字段改名：点击第一行字段名弹出（原行内输入框会挤压两行布局）
     var renameIdx by remember { mutableStateOf<Int?>(null) }
     var renameText by remember { mutableStateOf("") }
+    val toaster = LocalToaster.current
+    val context = LocalContext.current
 
     LaunchedEffect(m.saved) {
-        if (m.saved) onBack()
+        if (m.saved) {
+            // r38 E4/E5：复制并自定义 / 编辑参数保存成功 → toast 后返回库页
+            val stored = source as? Source.Stored
+            when (stored?.mode) {
+                Source.MODE_COPY -> notify(toaster, context, context.str(R.string.copy_created))
+                Source.MODE_EDIT -> notify(toaster, context, context.str(R.string.params_updated))
+            }
+            onBack()
+        }
     }
 
     val readingFallback = stringResource(R.string.state_reading)

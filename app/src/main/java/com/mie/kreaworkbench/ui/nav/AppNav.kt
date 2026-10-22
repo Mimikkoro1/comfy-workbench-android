@@ -23,6 +23,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -35,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.BottomDock
 import com.mie.kreaworkbench.ui.components.GlassAlertDialog
@@ -70,6 +73,7 @@ import com.mie.kreaworkbench.ui.motion.HERO_MS
 import com.mie.kreaworkbench.ui.motion.HeroEasing
 import com.mie.kreaworkbench.ui.motion.LocalAnimScope
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
+import com.mie.kreaworkbench.ui.locale.workflowLabel
 import com.mie.kreaworkbench.ui.screens.gallery.GalleryScreen
 import com.mie.kreaworkbench.ui.screens.custom.CustomModel
 import com.mie.kreaworkbench.ui.screens.custom.CustomScreen
@@ -78,8 +82,10 @@ import com.mie.kreaworkbench.ui.screens.gen.ImmersiveBackdrop
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
 import com.mie.kreaworkbench.ui.screens.library.LibraryEditorScreen
 import com.mie.kreaworkbench.ui.screens.library.LibraryScreen
+import com.mie.kreaworkbench.ui.screens.library.Source
 import com.mie.kreaworkbench.ui.screens.library.WorkflowImportScreen
 import com.mie.kreaworkbench.ui.screens.models.ModelsScreen
+import com.mie.kreaworkbench.ui.screens.onboarding.OnboardingScreen
 import com.mie.kreaworkbench.ui.screens.settings.AboutScreen
 import com.mie.kreaworkbench.ui.screens.settings.AppearancePage
 import com.mie.kreaworkbench.ui.screens.settings.BackgroundPage
@@ -113,6 +119,11 @@ private sealed interface Scene {
         override val depth = 1
     }
 
+    /** r38 E4/E5：库内工作流的参数配置页，复用 WorkflowImportScreen。 */
+    data class WorkflowCustomize(val sourceId: String, val mode: String) : Scene {
+        override val depth = 1
+    }
+
     data class LibraryEditor(val libId: String) : Scene {
         override val depth = 1
     }
@@ -132,6 +143,11 @@ private sealed interface Scene {
     data object SettingsAppearance : Scene {
         override val depth = 1
     }
+
+    /** r36：全新安装引导页。depth = 0（与主界面平级，从它 push 设置子页走正常滑入）。 */
+    data object Onboarding : Scene {
+        override val depth = 0
+    }
 }
 
 private fun sceneOf(stack: List<Overlay>): Scene = when (val top = stack.lastOrNull()) {
@@ -139,11 +155,13 @@ private fun sceneOf(stack: List<Overlay>): Scene = when (val top = stack.lastOrN
     Overlay.Gallery -> Scene.Gallery
     is Overlay.Viewer -> Scene.Viewer(top.ids, top.index, top.origin)
     is Overlay.WorkflowImport -> Scene.WorkflowImport(top.uris)
+    is Overlay.WorkflowCustomize -> Scene.WorkflowCustomize(top.sourceId, top.mode)
     is Overlay.LibraryEditor -> Scene.LibraryEditor(top.libId)
     Overlay.About -> Scene.About
     Overlay.SettingsConnection -> Scene.SettingsConnection
     Overlay.SettingsBackground -> Scene.SettingsBackground
     Overlay.SettingsAppearance -> Scene.SettingsAppearance
+    Overlay.Onboarding -> Scene.Onboarding
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -199,6 +217,16 @@ fun AppNav(nav: NavModel) {
             try {
                 flow.collect { }
                 nav.pop()
+            } catch (_: CancellationException) {
+            }
+            return@PredictiveBackHandler
+        }
+        // r36.2：引导页不直接 pop（不能让返回绕过逃生窗）。等手势提交后走统一出口：
+        // 做完两步 → 正常收尾；没做完 → 弹「还没完成」。无 seek 动画（同 Viewer 分支）。
+        if (current is Scene.Onboarding) {
+            try {
+                flow.collect { }
+                nav.requestOnboardingExit()
             } catch (_: CancellationException) {
             }
             return@PredictiveBackHandler
@@ -312,13 +340,67 @@ fun AppNav(nav: NavModel) {
                     Spacer(Modifier.height(8.dp))
                     targets.forEach { t ->
                         TextButton(onClick = { nav.chooseForI2i(t.id) }) {
-                            Text(t.displayName, color = MaterialTheme.colorScheme.onSurface)
+                            Text(workflowLabel(t), color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { nav.dismissI2iChooser() }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    // r36.1：引导页②步挑工作流弹窗（照 i2iChooser 模式）。列表可能比 i2i 多，包一层滚动；
+    // 空列表（播种未完）只显示提示 + 取消，不出空弹窗。
+    nav.wfChooser?.let { targets ->
+        GlassAlertDialog(
+            onDismissRequest = { nav.dismissWfChooser() },
+            title = { Text(stringResource(R.string.onboarding_wf_title)) },
+            text = {
+                if (targets.isEmpty()) {
+                    Text(
+                        stringResource(R.string.onboarding_wf_empty),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        targets.forEach { t ->
+                            TextButton(onClick = { nav.chooseWf(t.id) }) {
+                                Text(workflowLabel(t), color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { nav.dismissWfChooser() }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    // r36.2：引导页逃生窗（返回手势与「开始生成」共用，状态在 NavModel）。
+    // 「继续配置」留下；「仍要进入」置位 onboarded 收引导，此后不再自动弹（设置可复看）。
+    if (nav.showOnboardingSkip) {
+        GlassAlertDialog(
+            onDismissRequest = { nav.dismissOnboardingSkip() },
+            title = { Text(stringResource(R.string.onboarding_skip_title)) },
+            text = {
+                Text(
+                    stringResource(R.string.onboarding_skip_body),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { nav.confirmOnboardingSkip() }) {
+                    Text(stringResource(R.string.onboarding_skip_go))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { nav.dismissOnboardingSkip() }) {
+                    Text(stringResource(R.string.onboarding_skip_stay))
+                }
+            },
         )
     }
 
@@ -348,14 +430,42 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
             uris = scene.uris,
             onBack = { nav.pop() },
         )
+        is Scene.WorkflowCustomize -> WorkflowImportScreen(
+            source = Source.Stored(scene.sourceId, scene.mode),
+            onBack = { nav.pop() },
+        )
         is Scene.LibraryEditor -> LibraryEditorScreen(
             libId = scene.libId,
             onBack = { nav.pop() },
         )
-        Scene.About -> AboutScreen(onBack = { nav.pop() })
-        Scene.SettingsConnection -> ConnectionPage(onBack = { nav.pop() })
+        Scene.About -> AboutScreen(
+            onBack = { nav.pop() },
+            onQuickStart = { nav.openOnboarding() },
+        )
+        Scene.SettingsConnection -> ConnectionPage(
+            onBack = { nav.pop() },
+            autoScan = nav.pendingAutoScan,
+            onAutoScanConsumed = { nav.pendingAutoScan = false },
+        )
         Scene.SettingsBackground -> BackgroundPage(onBack = { nav.pop() })
         Scene.SettingsAppearance -> AppearancePage(onBack = { nav.pop() })
+        Scene.Onboarding -> {
+            // r36.1：步骤完成判定从 settings 读，①=地址已配、②=工作流已选
+            val serverReady by nav.serverReady.collectAsState()
+            val wf by nav.workflow.collectAsState()
+            OnboardingScreen(
+                s1Done = serverReady,
+                s2Done = wf.isNotBlank(),
+                onConnect = { nav.push(Overlay.SettingsConnection) },
+                onAutoScan = {
+                    nav.pendingAutoScan = true
+                    nav.push(Overlay.SettingsConnection)
+                },
+                onWorkflows = { nav.openWfChooser() },
+                onHelp = { nav.push(Overlay.About) },
+                onStart = { nav.requestOnboardingExit() },
+            )
+        }
     }
 }
 
@@ -417,8 +527,16 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
                 AppTab.T2I -> {
                     // 「生成」tab 按当前工作流渲染：无工作流 → 空状态；非空 → 导入工作流的表单页
                     val wf by nav.workflow.collectAsState()
+                    val serverReady by nav.serverReady.collectAsState()
+                    val builtins by nav.builtins.collectAsState()
                     if (wf.isBlank()) {
-                        GenEmptyTab(onImport = { nav.tab = AppTab.WORKFLOWS })
+                        GenEmptyTab(
+                            serverReady = serverReady,
+                            builtins = builtins,
+                            onConfigureServer = { nav.openOnboarding() },
+                            onPickWorkflow = { id -> nav.pickWorkflow(id) },
+                            onImport = { nav.tab = AppTab.WORKFLOWS },
+                        )
                     } else {
                         CustomScreen(
                             workflowId = wf,
@@ -440,11 +558,18 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
     }
 }
 
-/** 生成 tab 的空状态（无可用工作流时）：文案 + 「去导入工作流」。
+/** 生成 tab 的空状态（无可用工作流时）：按配置进度引导。
  *  r27：空态也走沉浸风——铺一层深色，白字 + 玻璃按钮；浅色主题下 ReadabilityScrim 是浅色的，
- *  不铺这层就会白底白字。 */
+ *  不铺这层就会白底白字。
+ *  r38 E6：没配服务器 → 引导去配置；配好了 → 直接列内置模板点选。 */
 @Composable
-private fun GenEmptyTab(onImport: () -> Unit) {
+private fun GenEmptyTab(
+    serverReady: Boolean,
+    builtins: List<ImportedWorkflowMeta>,
+    onConfigureServer: () -> Unit,
+    onPickWorkflow: (String) -> Unit,
+    onImport: () -> Unit,
+) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f))) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader(stringResource(R.string.tab_generate), ink = ImmersiveInk)
@@ -453,7 +578,14 @@ private fun GenEmptyTab(onImport: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Spacer(Modifier.weight(1f))
-                WorkflowEmptyState(onGoImport = onImport, immersive = true)
+                WorkflowEmptyState(
+                    serverReady = serverReady,
+                    builtins = builtins,
+                    onConfigureServer = onConfigureServer,
+                    onPickWorkflow = onPickWorkflow,
+                    onGoImport = onImport,
+                    immersive = true,
+                )
                 Spacer(Modifier.weight(1.2f))
             }
         }

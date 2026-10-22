@@ -28,7 +28,12 @@ import com.mie.kreaworkbench.ui.screens.settings.AppSettingsModel
 fun CacheManagementSheet(onDismiss: () -> Unit, vm: AppSettingsModel = viewModel()) {
     val s by vm.settings.collectAsState()
     var confirm by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { vm.refreshUsage() }
+    // 收藏数量（round34）：清缓存确认弹窗里注明「已收藏的图片会保留」，可带上数量
+    var favCount by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        vm.refreshUsage()
+        favCount = vm.favoriteCount()
+    }
     GlassBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { GlassDragHandle() },
@@ -63,7 +68,18 @@ fun CacheManagementSheet(onDismiss: () -> Unit, vm: AppSettingsModel = viewModel
         GlassAlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text(stringResource(R.string.cache_clear)) },
-            text = { Text(stringResource(R.string.cache_clear_body)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.cache_clear_body))
+                    Text(
+                        if (favCount > 0) stringResource(R.string.cache_keep_favorited_n, favCount)
+                        else stringResource(R.string.cache_keep_favorited),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ImmersiveInkMuted,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirm = false
