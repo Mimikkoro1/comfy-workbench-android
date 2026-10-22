@@ -4,6 +4,8 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE) [![Android CI](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Mimikkoro1/comfy-workbench-android/actions/workflows/android-ci.yml)
 
+国内访问 GitHub 不稳定的话，可以看 Gitee 镜像：[gitee.com/Mimikkoro1/comfy-workbench-android](https://gitee.com/Mimikkoro1/comfy-workbench-android)（代码同步，APK 以 GitHub Releases 为准）。
+
 **Comfy工作台** 是一个原生 Android（Kotlin + Jetpack Compose）应用。电脑上把 ComfyUI 工作流导出成 API 格式，手机里导入，参数变成几个输入框：提示词、种子、尺寸、参考图、一条参考视频。点一下就提交到你自己的 ComfyUI。
 
 它不是手机上的节点编辑器，也不替代 ComfyUI 网页端。节点和连线留在电脑上，手机只负责出图。
