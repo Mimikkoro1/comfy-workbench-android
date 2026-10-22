@@ -1,4 +1,8 @@
+<a id="zh"></a>
+
 # Comfy工作台（Comfy Workbench）
+
+**中文** | [English](#english)
 
 > 装上、连上你的 ComfyUI、挑一个内置模板，手机上点一下出图。不连线，不改节点。
 
@@ -156,7 +160,11 @@ gradlew.bat assembleRelease
 
 ---
 
+<a id="english"></a>
+
 ## English
+
+[中文](#zh) | **English**
 
 **Comfy Workbench** is a native Android app that drives your own ComfyUI. It ships with 6 built-in templates, so you can generate right after install; you can also export your own workflow as API-format JSON and import it. The parameters become a few fields: prompt, seed, size, reference image, or one reference video. Tap once. It submits to your own ComfyUI over HTTP + WebSocket. No cloud in between.
 
