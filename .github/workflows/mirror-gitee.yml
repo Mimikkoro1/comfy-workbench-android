@@ -1,0 +1,22 @@
+name: Mirror to Gitee
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          git remote add gitee "https://Mimikkoro1:${GITEE_TOKEN}@gitee.com/Mimikkoro1/comfy-workbench-android.git"
+          git push --force gitee HEAD:refs/heads/main
+          git push --force gitee --tags
