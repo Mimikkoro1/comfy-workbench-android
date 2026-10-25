@@ -48,19 +48,19 @@ class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
 
     suspend fun upload(file: File, onProgress: (Float) -> Unit): Pair<String, String> {
         var last: Exception? = null
-        val backoff = longArrayOf(0L, 1000L, 3000L, 6000L)
-        for (i in 0 until 4) {
-            if (backoff[i] > 0) delay(backoff[i])
+        for (i in 0 until RETRY_ATTEMPTS) {
+            val wait = backoffDelayMs(i)
+            if (wait > 0) delay(wait)
             try {
                 return doUpload(file, onProgress)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
-                if (!e.network || i == 3) throw e
+                if (!e.network || i == RETRY_ATTEMPTS - 1) throw e
                 last = e
             } catch (e: IOException) {
                 last = e
-                if (i == 3) throw friendlyIo(e)
+                if (i == RETRY_ATTEMPTS - 1) throw friendlyIo(e)
             }
         }
         throw (last as? ApiException) ?: friendlyIo(last as? Throwable)
@@ -134,19 +134,19 @@ class Transfer(private val settings: SettingsStore, auth: Interceptor? = null) {
         val base = settings.baseUrl()
         val url = if (urlPath.startsWith("http")) urlPath else base + urlPath
         var last: Exception? = null
-        val backoff = longArrayOf(0L, 1000L, 3000L, 6000L)
-        for (i in 0 until 4) {
-            if (backoff[i] > 0) delay(backoff[i])
+        for (i in 0 until RETRY_ATTEMPTS) {
+            val wait = backoffDelayMs(i)
+            if (wait > 0) delay(wait)
             try {
                 return withContext(Dispatchers.IO) { downloadOnce(url, dest, onProgress) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
-                if (!e.network || i == 3) throw e
+                if (!e.network || i == RETRY_ATTEMPTS - 1) throw e
                 last = e
             } catch (e: IOException) {
                 last = e
-                if (i == 3) throw friendlyIo(e)
+                if (i == RETRY_ATTEMPTS - 1) throw friendlyIo(e)
             }
         }
         throw (last as? ApiException) ?: friendlyIo(last as? Throwable)

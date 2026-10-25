@@ -55,6 +55,7 @@ import com.mie.kreaworkbench.ui.components.LocalGlassDismiss
 import com.mie.kreaworkbench.ui.components.ImmersiveHairline
 import com.mie.kreaworkbench.ui.components.ImmersiveIcon
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.ui.components.ImmersiveShadow
 import com.mie.kreaworkbench.ui.components.LocalGlassChrome
 import com.mie.kreaworkbench.ui.components.glassSwitchColors
@@ -134,11 +135,13 @@ fun AdvGachaGuideDialog(onConfirm: () -> Unit, onNever: () -> Unit, onCancel: ()
     )
 }
 
-/** 底栏那一行：只拼当前真画出来的维。某维被服端留空时，别留一段陈旧文案。服装池不进这行。 */
+/** 底栏那一行：只拼当前真画出来的维。某维被服端留空时，别留一段陈旧文案。服装池不进这行。
+ *  r40：地址未设置时不再拼假筛选摘要，直接提示还没找到抽卡服务。 */
 @Composable
 fun advGachaSummary(vm: CustomModel, settings: UserSettings): String {
     // r39：设置没从磁盘加载完不显示假默认
     if (!vm.settingsLoaded) return stringResource(R.string.gacha_masters_loading)
+    if (settings.advGachaUrl.isBlank()) return stringResource(R.string.gacha_no_server)
     val view = gachaView(vm, settings)
     val parts = ArrayList<String>(4)
     if (view.modes.isNotEmpty()) parts.add(optionLabel(view.modes, view.mode, modeLabel(view.mode)))
@@ -152,9 +155,10 @@ fun advGachaSummary(vm: CustomModel, settings: UserSettings): String {
  * 点筛选条后向上弹出的筛选。服装池在最下面，不进摘要。
  * r32：有 options 就按服端来——某维数组为空就整框不画；没 options（旧服）才回退写死列表。
  * 母版框始终保留，它是所有筛选的入口。
+ * r40：抽卡地址为空（开启高级抽卡时的自动测试失败也落在这里）→ 原筛选框位置换空状态 + 「去设置」。
  */
 @Composable
-fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings) {
+fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings, onGoSettings: () -> Unit = {}) {
     val scheme = MaterialTheme.colorScheme
     // r39：设置没从磁盘加载完不渲染默认值、不可点（防止以假默认为基准写全量）
     if (!vm.settingsLoaded) {
@@ -163,6 +167,18 @@ fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings) {
             fontSize = 11.sp,
             color = scheme.onSurfaceVariant,
         )
+        return
+    }
+    if (settings.advGachaUrl.isBlank()) {
+        Column(Modifier.fillMaxWidth()) {
+            Text(
+                stringResource(R.string.gacha_no_server),
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onGoSettings) { Text(stringResource(R.string.gacha_go_settings)) }
+        }
         return
     }
     val view = gachaView(vm, settings)
@@ -305,7 +321,11 @@ fun AdvGachaTempSheet(vm: CustomModel, onDismiss: () -> Unit) {
                         Modifier
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(if (pinned) Color.White.copy(alpha = 0.18f) else Color.Transparent),
+                            // r46：经典下钉住态用主色（白玻璃底在实心弹层面上看不见）。
+                            .background(
+                                if (pinned) (if (isClassic()) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.18f))
+                                else Color.Transparent,
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         ImmersiveIcon(

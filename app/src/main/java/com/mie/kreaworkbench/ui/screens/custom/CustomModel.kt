@@ -17,9 +17,10 @@ import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.ui.locale.workflowLabelStr
+import com.mie.kreaworkbench.data.api.ServerKind
+import com.mie.kreaworkbench.data.api.normalizeServerUrl
 import com.mie.kreaworkbench.data.api.trimBase
 import com.mie.kreaworkbench.data.buildCustomBody
-import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
 import com.mie.kreaworkbench.data.gacha.GACHA_MAX_COUNT
 import com.mie.kreaworkbench.data.gacha.GACHA_PROMPT_CAP
 import com.mie.kreaworkbench.data.gacha.GachaCatalog
@@ -30,6 +31,8 @@ import com.mie.kreaworkbench.data.gacha.GachaSelection
 import com.mie.kreaworkbench.data.gacha.correctGachaSelection
 import com.mie.kreaworkbench.data.db.ImageRow
 import com.mie.kreaworkbench.data.db.JobRow
+import com.mie.kreaworkbench.data.comfy.readCache
+import com.mie.kreaworkbench.data.comfy.writeCache
 import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.data.workflows.LoraEntry
 import com.mie.kreaworkbench.data.workflows.Specs
@@ -43,6 +46,7 @@ import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.data.workflows.pickOutputNode
 import com.mie.kreaworkbench.data.workflows.resolveLoraOn
 import com.mie.kreaworkbench.data.workflows.resolveLoraStrength
+import com.mie.kreaworkbench.data.workflows.upgradeSamplerComboSpecs
 import com.mie.kreaworkbench.startGenerationService
 import com.mie.kreaworkbench.util.VIDEO_MAX_BYTES
 import com.mie.kreaworkbench.util.VideoThumb
@@ -229,6 +233,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     var choiceLoadFailed by mutableStateOf(emptySet<String>())
         private set
 
+    // r42：当前显示的选项来自本地缓存（还没从服务器拉到新的）。拉到新值或本机没缓存为 false。
+    var choicesFromCache by mutableStateOf(false)
+        private set
+
     // 「刷新」进行中（round13 第 7 项：模型采样 Tab 顶部按钮）
     var refreshing by mutableStateOf(false)
         private set
@@ -237,7 +245,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     var drawCat by mutableStateOf("")
     var drawInc by mutableStateOf("")
     var drawExc by mutableStateOf("")
-    var drawCategories by mutableStateOf(listOf("全部" to ""))
+    var drawCategories by mutableStateOf(listOf("" to ""))
 
     // file:image（本版最多一个 spec）
     var sourcePath by mutableStateOf<String?>(null)
@@ -359,7 +367,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 if (arr != null) for (i in 0 until arr.length()) {
                     arr.optJSONObject(i)?.let { add(it) }
                 }
-            }
+            }.let { upgradeSamplerComboSpecs(it, wf) }
             loraEntries = loraEntriesOf(wf)
             restore(id)
             loraManaged = loraManagedSpecKeys(loraEntries, specs)
@@ -405,7 +413,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         val randoms = saved.optJSONObject("random") ?: JSONObject()
         // 抽卡筛选的私有键：不进 values、不参与填参，只在这里恢复
         val filter = saved.optJSONObject("kwb_draw_filter")
-        drawCat = filter?.optString("cat").orEmpty()
+        drawCat = normalizeDrawCat(filter?.optString("cat"))
         drawInc = filter?.optString("inc").orEmpty()
         drawExc = filter?.optString("exc").orEmpty()
 
@@ -418,7 +426,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                 "text", "prompt_pool", "select", "model" ->
                     t[key] = values.optString(key, Specs.defaultText(spec))
                 "int", "float", "int_random" -> {
-                    val raw = values.opt(key)
+                    val raw: Any? = values.opt(key)
                     t[key] = when (raw) {
                         is Number -> trimNum(raw.toDouble())
                         is String -> raw
@@ -455,10 +463,49 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
      * model spec 的下拉选项 + kwb_combo select 的在线选项。
      * round13 第 4 项：单个槽位拉取失败（401/超时等）时保留该槽位的旧选项、不再写空列表
      * （写空会让下拉退化成只读文本且被记住），槽位 key 记入 choiceLoadFailed 供 UI 提示。
+     * r42：开头先上本地缓存（filesDir/objinfo/<serverKey>.json，电脑关机/断线时立刻有上次的
+     * 选项），然后照旧发请求；拉到非空新值覆盖显示并写缓存，拉取失败保留缓存显示（提示不吞）。
      */
     private suspend fun loadChoices() {
         val wf = workflowJson ?: return
+        val dir = File(getApplication<Application>().filesDir, "objinfo")
+        val serverUrl = c.settings.current().serverUrl
+        val cached = withContext(Dispatchers.IO) { readCache(dir, serverUrl) }
+        var fromCache = false
+        if (cached.isNotEmpty()) {
+            for (spec in specs) {
+                val key = Specs.key(spec)
+                when (Specs.type(spec)) {
+                    "model" -> {
+                        val cls = wf.optJSONObject(Specs.nodeId(spec))?.optString("class_type").orEmpty()
+                        if (cls.isNotBlank()) {
+                            cached["$cls|${Specs.field(spec)}"]?.let {
+                                modelChoices = modelChoices + (key to it)
+                                fromCache = true
+                            }
+                        }
+                    }
+                    "select" -> {
+                        val combo = spec.optString("kwb_combo")
+                        if (combo.isNotBlank()) {
+                            val cls = combo.substringBeforeLast('|')
+                            val field = combo.substringAfterLast('|', "")
+                            if (cls.isNotBlank() && field.isNotBlank() && cls != combo) {
+                                cached["$cls|$field"]?.let {
+                                    comboChoices = comboChoices + (key to it)
+                                    fromCache = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        choicesFromCache = fromCache
+
         val failed = mutableSetOf<String>()
+        // r42：本轮成功拉到的选项（key = classType|field，与缓存文件同维度）
+        val fresh = LinkedHashMap<String, List<String>>()
         for (spec in specs) {
             val key = Specs.key(spec)
             when (Specs.type(spec)) {
@@ -471,6 +518,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     try {
                         val choices = c.api.modelChoices(cls, Specs.field(spec))
                         modelChoices = modelChoices + (key to choices)
+                        if (choices.isNotEmpty()) {
+                            fresh["$cls|${Specs.field(spec)}"] = choices
+                            choicesFromCache = false
+                        }
                     } catch (_: Exception) {
                         failed.add(key)
                     }
@@ -484,7 +535,12 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
                     val field = combo.substringAfterLast('|', "")
                     if (cls.isBlank() || field.isBlank() || cls == combo) continue
                     try {
-                        comboChoices = comboChoices + (key to c.api.comboChoices(cls, field))
+                        val choices = c.api.comboChoices(cls, field)
+                        comboChoices = comboChoices + (key to choices)
+                        if (choices.isNotEmpty()) {
+                            fresh["$cls|$field"] = choices
+                            choicesFromCache = false
+                        }
                     } catch (_: Exception) {
                         failed.add(key)
                     }
@@ -492,6 +548,10 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             }
         }
         choiceLoadFailed = failed
+        // r42：只有成功拉到非空列表才写缓存（merge 再挡一层：fresh 里的空 key 不覆盖旧值）
+        if (fresh.isNotEmpty()) {
+            withContext(Dispatchers.IO) { writeCache(dir, serverUrl, fresh) }
+        }
     }
 
     /** 仅重拉当前工作流的选项（不动模型目录缓存）；err=null 成功。供参数区「重试」复用。 */
@@ -509,18 +569,21 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 「模型采样」Tab 顶部刷新（round13 第 7 项）：清掉模型目录内存缓存重新请求 /object_info
-     * （拿到最新 checkpoint/LoRA/VAE 与 sampler/scheduler 选项），再重拉本页全部下拉选项，
-     * 相当于重新解析参数面板。已填的参数值（textValues）一律不动；中途任何一步失败都保留
-     * 旧数据（models 失败时 ComfyApi 不覆盖旧缓存，选项失败时槽位保留旧值），err 回调给 UI 提示。
+     * 「模型采样」Tab 顶部刷新（round13 第 7 项）：重拉本页全部下拉选项，相当于重新解析参数面板。
+     * 已填的参数值（textValues）一律不动；中途任何一步失败都保留旧数据，err 回调给 UI 提示。
+     * r42：原来借 models(refresh=true) 的失败上抛报告刷新失败，models() 已删（死缓存），
+     * 改用本轮选项拉取失败的槽位判断——对外语义不变（拉不到就报「刷新失败」）。
      */
     fun refreshAll(onDone: (String?) -> Unit) {
         viewModelScope.launch {
             refreshing = true
             try {
-                c.api.models(refresh = true)
                 loadChoices()
-                onDone(null)
+                if (choiceLoadFailed.isNotEmpty()) {
+                    onDone(getApplication<Application>().str(R.string.err_cannot_connect))
+                } else {
+                    onDone(null)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -550,14 +613,16 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 打开工作流后选项仍缺（首屏拉取时网络未就绪、服务器冷启动超时等）：后台自动补拉一次，
-     * 等价于手点模型页的「刷新」（models(refresh=true) + 重拉选项）。延迟一小段再发，避开
-     * 冷启动连接建立期；成功则下拉就地就绪，失败保持既有提示（选项未加载/服务器未安装），
-     * 用户仍可手动刷新。选项齐了或未配服务器则不发。
+     * 打开工作流后选项仍缺，或当前显示来自本地缓存（r42）：后台自动补拉一次。
+     * 等价于手点模型页的「刷新」。延迟一小段再发，避开冷启动连接建立期；成功则下拉就地就绪、
+     * 「来自缓存」小字消失，失败保持既有提示（选项未加载/服务器未安装），用户仍可手动刷新。
+     * 选项齐了、缓存也不用补、或未配服务器则不发。防重入标志保证每次换绑只补拉一次。
      */
     private fun maybeAutoRefreshChoices() {
         if (autoRefreshDone) return
-        if (!choicesIncomplete()) return
+        // r42：缓存有数据时 choicesIncomplete() 可能为假——「来自缓存」的显示也要刷一次，
+        // 否则缓存永远不更新；autoRefreshDone 防止刷完又触发循环
+        if (!choicesIncomplete() && !choicesFromCache) return
         autoRefreshDone = true
         val target = boundId
         viewModelScope.launch {
@@ -565,7 +630,6 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             if (boundId != target) return@launch
             try {
                 if (c.settings.current().serverUrl.isBlank()) return@launch
-                c.api.models(refresh = true)
                 loadChoices()
             } catch (e: CancellationException) {
                 throw e
@@ -696,7 +760,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         try {
             val meta = c.library.meta()
             val arr = meta.optJSONArray("categories")
-            val list = mutableListOf("全部" to "")
+            val list = mutableListOf("" to "")
             if (arr != null) {
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
@@ -882,6 +946,34 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     fun setAdvGacha(on: Boolean) {
         advOn = on
         updateGacha { it.copy(advGacha = on) }
+        if (on) autoFillGachaUrlIfNeeded()
+    }
+
+    /**
+     * r40：开启高级抽卡且地址为空时，拿扫描记下的抽卡地址自动填并测一次；
+     * 成功按原规则保存并刷新目录，失败什么都不存（抽卡区显示「还没找到抽卡服务」）。
+     */
+    private fun autoFillGachaUrlIfNeeded() {
+        viewModelScope.launch {
+            val cur = c.settings.current()
+            if (cur.advGachaUrl.isNotBlank()) return@launch
+            val candidate = c.settings.scannedGachaUrls().firstOrNull() ?: return@launch
+            val target = normalizeServerUrl(candidate, ServerKind.GACHA) ?: return@launch
+            try {
+                c.gacha.catalog(target)
+                c.settings.update {
+                    it.copy(
+                        advGachaUrl = target,
+                        advGachaHistory = (listOf(target) + it.advGachaHistory.filter { h -> h != target }).take(8),
+                    )
+                }
+                refreshGachaMasters(target)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 测试失败：不保存任何值，空状态引导用户去设置
+            }
+        }
     }
 
     fun dismissGachaGuide() {
@@ -1096,7 +1188,8 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 高级抽卡：向电脑上的抽卡页要词，每条词各排一个出图任务。不出图请求不打到那个服务的 /api/comfy。 */
+    /** 高级抽卡：向电脑上的抽卡页要词，每条词各排一个出图任务。不出图请求不打到那个服务的 /api/comfy。
+     *  r40：地址为空不发请求，提示去设置（不再回落到对别人连不上的假默认地址）。 */
     fun drawAdvanced(count: Int) {
         if (gachaDrawing || submitting) return
         val n = count.coerceIn(1, GACHA_MAX_COUNT)
@@ -1106,7 +1199,11 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             message = ""
             try {
                 val req = gachaRequest(c.settings.current(), n)
-                val base = trimBase(req.base).ifBlank { DEFAULT_ADV_GACHA_URL }
+                val base = trimBase(req.base)
+                if (base.isBlank()) {
+                    message = getApplication<Application>().str(R.string.gacha_no_server)
+                    return@launch
+                }
                 val prompts = c.gacha.draw(req.copy(base = base, count = n))
                 if (prompts.isEmpty()) {
                     message = getApplication<Application>().str(R.string.err_gacha_empty)

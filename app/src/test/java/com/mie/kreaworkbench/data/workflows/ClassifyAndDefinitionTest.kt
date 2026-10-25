@@ -72,7 +72,8 @@ class ClassifyAndDefinitionTest {
         assertEquals("type", "select", sampler.optString("type"))
         assertEquals("kwb_combo", "KSampler|sampler_name", sampler.optString("kwb_combo"))
         assertEquals("置信度不变", "low", sampler.optString("confidence"))
-        assertFalse("默认勾选不变", sampler.optBoolean("enabled"))
+        // r44：KSampler 的 sampler_name 默认勾选（最小集 steps/cfg/sampler_name/scheduler）
+        assertTrue("采样器字段默认勾选", sampler.optBoolean("enabled"))
         // denoise 是 int 不是 text，不升级
         val denoise = m.getValue("1|denoise").spec
         assertEquals("int 不升级", "int", denoise.optString("type"))

@@ -335,7 +335,7 @@ internal fun queryDisplayName(ctx: Context, uri: Uri): String {
             if (!n.isNullOrBlank()) return n
         }
     }
-    return uri.lastPathSegment ?: "未命名.json"
+    return uri.lastPathSegment ?: ctx.str(R.string.untitled_name)
 }
 
 /** 流式读取文本并限制大小（超限抛 ImportParseException），不整文件读进内存再判断。 */

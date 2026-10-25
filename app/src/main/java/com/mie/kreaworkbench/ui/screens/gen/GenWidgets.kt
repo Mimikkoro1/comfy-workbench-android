@@ -111,8 +111,10 @@ import com.mie.kreaworkbench.ui.motion.buzz
 import com.mie.kreaworkbench.ui.motion.pressScale
 import com.mie.kreaworkbench.ui.motion.sharedImage
 import com.mie.kreaworkbench.ui.motion.thumbRequest
+import com.mie.kreaworkbench.ui.theme.DarkBg
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
 import com.mie.kreaworkbench.ui.theme.cardBorder
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.util.VideoThumb
 import java.io.File
 
@@ -233,7 +235,7 @@ fun capsuleStatus(job: LiveJob, queuedExtra: Int, context: Context): String {
     val special = when {
         job.phase == "paused" -> job.line(context)
         job.phase == "queued" -> job.line(context)
-        job.phase == "downloading" && job.downloadFailed -> context.str(R.string.phase_video_retry)
+        job.phase == "downloading" && job.downloadFailed -> context.str(R.string.phase_download_retry)
         job.phase == "upload_ask" || job.phase == "upload_fail_ask" -> job.line(context)
         else -> null
     }
@@ -288,7 +290,10 @@ fun GenerateCapsule(
         if (pressed) haptic.buzz(HapticFeedbackType.ContextClick)
     }
     val shape = RoundedCornerShape(16.dp)
+    // r48：经典主题下生成按钮恢复主色实底（同设置页「恢复导入时默认值」的主按钮），空闲与生成中同色。
+    val classic = frosted && isClassic()
     val plate = when {
+        classic -> Modifier.background(scheme.primary)
         frosted -> Modifier.immersiveGlass(20.dp)
         generating -> Modifier.background(scheme.primary.copy(alpha = 0.22f))
         else -> Modifier.background(scheme.primary)
@@ -300,10 +305,10 @@ fun GenerateCapsule(
             .pressScale(interaction, pressedScale = 0.92f)
             .clip(shape)
             .then(plate)
-            .then(if (frosted) Modifier.border(1.dp, ImmersiveHairline, shape) else Modifier)
+            .then(if (frosted && !classic) Modifier.border(1.dp, ImmersiveHairline, shape) else Modifier)
             .combinedClickable(
                 interactionSource = interaction,
-                indication = ripple(color = if (frosted) Color.White else if (generating) scheme.primary else scheme.onPrimary),
+                indication = ripple(color = if (classic) scheme.onPrimary else if (frosted) Color.White else if (generating) scheme.primary else scheme.onPrimary),
                 enabled = enabled,
                 onClick = onClick,
                 onLongClick = onLongClick,
@@ -316,16 +321,23 @@ fun GenerateCapsule(
                     .align(Alignment.CenterStart)
                     .fillMaxHeight()
                     .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                    .background(if (frosted) Color.White.copy(alpha = 0.28f) else scheme.primary.copy(alpha = 0.55f)),
+                    // r48：经典主题下底板是主色实底，进度改 onPrimary 才看得见；毛玻璃仍是白进度。
+                    .background(
+                        if (classic) scheme.onPrimary.copy(alpha = 0.28f)
+                        else if (frosted) Color.White.copy(alpha = 0.28f)
+                        else scheme.primary.copy(alpha = 0.55f),
+                    ),
             )
         } else if (generating && indeterminate) {
             LinearProgressIndicator(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
-                color = if (frosted) Color.White else scheme.primary,
-                trackColor = if (frosted) Color.White.copy(alpha = 0.15f) else scheme.primary.copy(alpha = 0.15f),
+                color = if (classic) scheme.onPrimary else if (frosted) Color.White else scheme.primary,
+                trackColor = if (classic) scheme.onPrimary.copy(alpha = 0.15f)
+                else if (frosted) Color.White.copy(alpha = 0.15f)
+                else scheme.primary.copy(alpha = 0.15f),
             )
         }
-        val ink = if (frosted) ImmersiveInk else if (generating) scheme.onSurface else scheme.onPrimary
+        val ink = if (classic) scheme.onPrimary else if (frosted) ImmersiveInk else if (generating) scheme.onSurface else scheme.onPrimary
         val inkStyle = if (frosted) ImmersiveShadow else null
         if (generating) {
             Column(
@@ -343,7 +355,7 @@ fun GenerateCapsule(
                 if (hint.isNotBlank()) {
                     Text(
                         hint,
-                        color = if (frosted) ImmersiveInkMuted else ink.copy(alpha = 0.62f),
+                        color = if (frosted && !classic) ImmersiveInkMuted else ink.copy(alpha = 0.62f),
                         style = MaterialTheme.typography.labelSmall.copy(shadow = inkStyle),
                         fontSize = 11.sp,
                         maxLines = 1,
@@ -727,7 +739,12 @@ private fun HeroStill(shot: HeroShot?, dark: Boolean, pending: Boolean, modifier
         // r29.1：无图一律走深色配方，不再看 LocalIsDark。沉浸式 UI 是白字体系，
         // 浅色主题的亮底叠上 ImmersiveInk 会把字洗白（反推/文本类工作流一片看不清）。
         // dark 参数仍保留给有图分支的调用语义，此处固定 true。
-        else -> GlassFallback(dark = true, modifier)
+        // r46：经典主题不画三层径向渐变，用深色纯色顶住（压图白字仍要深底）。
+        else -> if (isClassic()) {
+            Box(modifier.fillMaxSize().background(DarkBg))
+        } else {
+            GlassFallback(dark = true, modifier)
+        }
     }
 }
 

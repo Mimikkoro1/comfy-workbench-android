@@ -39,6 +39,8 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
     private val lock = Any()
     private val steps = HashMap<String, Pair<Int, Int>>()
     private val currentNodes = HashMap<String, String>()
+    /** r42：execution_error 详情，按 prompt_id 独立缓存（不被下面的 clear 清掉），最多 20 条。 */
+    private val errors = BoundedCache<String, ExecError>(ERROR_CACHE_MAX)
 
     private val lastTouch = AtomicLong(0L)
     private val socketGone = AtomicBoolean(true)
@@ -64,6 +66,9 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
 
     /** 某 prompt 当前正在执行的节点 id（round6 阶段文案用）；没有数据返回 null。 */
     fun currentNodeFor(promptId: String): String? = synchronized(lock) { currentNodes[promptId] }
+
+    /** r42：某 prompt 的 execution_error 详情（WS 收到过才有）；没有返回 null，不阻塞等待。 */
+    fun errorOf(promptId: String): ExecError? = errors[promptId]
 
     private suspend fun loop() {
         val backoff = longArrayOf(1000L, 3000L, 6000L, 10000L)
@@ -185,8 +190,16 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
                         synchronized(lock) { currentNodes[pid] = node }
                     }
                 }
-            "execution_success", "execution_error", "execution_interrupted" ->
+            "execution_success", "execution_interrupted" ->
                 data.optString("prompt_id").takeIf { it.isNotBlank() }?.let { clear(it) }
+            "execution_error" -> {
+                val pid = data.optString("prompt_id")
+                if (pid.isNotBlank()) {
+                    // 错误缓存独立于 steps/currentNodes；坏消息直接忽略，不影响进度显示
+                    runCatching { parseExecutionError(data) }.getOrNull()?.let { errors.put(pid, it) }
+                    clear(pid)
+                }
+            }
         }
     }
 
@@ -215,5 +228,8 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
     private companion object {
         /** 连续这么久没有 getJob 触碰就主动断开（没有进行中的任务不挂连接）。 */
         const val IDLE_MS = 60_000L
+
+        /** r42：execution_error 详情缓存的条数上限。 */
+        const val ERROR_CACHE_MAX = 20
     }
 }

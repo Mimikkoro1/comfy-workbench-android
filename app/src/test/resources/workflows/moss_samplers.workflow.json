@@ -1,0 +1,7 @@
+{
+  "599": {"class_type": "KSamplerAdvanced", "_meta": {"title": "K采样器（高级）1"}, "inputs": {"add_noise": "enable", "noise_seed": ["649", 0], "steps": 18, "cfg": 3, "sampler_name": "euler", "scheduler": "simple", "start_at_step": 0, "end_at_step": 15, "return_with_leftover_noise": "enable", "model": ["899", 0], "positive": ["627", 0], "negative": ["859", 0], "latent_image": ["698", 0]}},
+  "858": {"class_type": "KSamplerAdvanced", "_meta": {"title": "K采样器（高级）2"}, "inputs": {"add_noise": "enable", "noise_seed": ["771", 0], "steps": 25, "cfg": 3, "sampler_name": "euler", "scheduler": "simple", "start_at_step": 6, "end_at_step": 25, "return_with_leftover_noise": "disable", "model": ["899", 0], "positive": ["627", 0], "negative": ["859", 0], "latent_image": ["647", 0]}},
+  "649": {"class_type": "Seed (rgthree)", "_meta": {"title": "Seed (1ST)"}, "inputs": {"seed": 420}},
+  "771": {"class_type": "SimpleMath+", "_meta": {"title": "Simple Math"}, "inputs": {"value": "a+b", "a": ["649", 0], "b": ["773", 0]}},
+  "773": {"class_type": "PrimitiveInt", "_meta": {"title": "Seed (2ND)"}, "inputs": {"value": 69}}
+}

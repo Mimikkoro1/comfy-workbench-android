@@ -55,26 +55,40 @@ fun isVideoEntry(o: JSONObject): Boolean {
 /**
  * 遍历单个 prompt 的 outputs（所有输出节点），收集 images/gifs/videos 里的图片与视频、
  * text/string 里的文本。VHS 的结果在 gifs，视频混在 images 里也按扩展名归到视频。
+ *
+ * r44：只要存在任何 type=="output" 的图片/视频项（SaveImage / SaveImageAdvanced /
+ * VHS_VideoCombine 等真正落盘到 output 的节点），就丢掉所有 type=="temp" 的项
+ * （PreviewImage、rgthree Image Comparer 等预览类）——两段采样工作流不再把第一段的
+ * 残余噪点预览当成结果收进图库。只有 temp、没有任何 output 项时照旧全收（老预览型
+ * 工作流不能因此变空）。文本输出不受影响，仍全收。type 缺省按 "output" 处理。
+ *
+ * [selectedNode] 非空且该节点在结果里有项时：它的项排最前（内部顺序不变）。
  */
-fun parseOutputEntries(outputs: JSONObject?): Pair<List<OutputEntry>, List<String>> {
+fun parseOutputEntries(outputs: JSONObject?, selectedNode: String? = null): Pair<List<OutputEntry>, List<String>> {
     if (outputs == null) return emptyList<OutputEntry>() to emptyList<String>()
-    val entries = ArrayList<OutputEntry>()
+    // 记下每条来自哪个节点，供指定出图节点排序用
+    data class Tagged(val nodeId: String, val entry: OutputEntry)
+    val tagged = ArrayList<Tagged>()
     val texts = ArrayList<String>()
     val keys = outputs.keys()
     while (keys.hasNext()) {
-        val node = outputs.optJSONObject(keys.next()) ?: continue
+        val nid = keys.next()
+        val node = outputs.optJSONObject(nid) ?: continue
         for (key in listOf("images", "gifs", "videos")) {
             val arr = node.optJSONArray(key) ?: continue
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 val filename = o.optString("filename")
                 if (filename.isBlank()) continue
-                entries.add(
-                    OutputEntry(
-                        filename = filename,
-                        subfolder = o.optString("subfolder"),
-                        type = o.optString("type", "output"),
-                        video = isVideoEntry(o),
+                tagged.add(
+                    Tagged(
+                        nid,
+                        OutputEntry(
+                            filename = filename,
+                            subfolder = o.optString("subfolder"),
+                            type = o.optString("type", "output"),
+                            video = isVideoEntry(o),
+                        ),
                     ),
                 )
             }
@@ -84,5 +98,16 @@ fun parseOutputEntries(outputs: JSONObject?): Pair<List<OutputEntry>, List<Strin
             normalizeOutputText(node.opt(key))?.let { if (it.isNotBlank()) texts.add(it) }
         }
     }
-    return entries to texts
+    var kept = if (tagged.any { it.entry.type == "output" }) {
+        tagged.filter { it.entry.type != "temp" }
+    } else {
+        tagged
+    }
+    if (!selectedNode.isNullOrBlank()) {
+        val front = kept.filter { it.nodeId == selectedNode }
+        if (front.isNotEmpty()) {
+            kept = front + kept.filter { it.nodeId != selectedNode }
+        }
+    }
+    return kept.map { it.entry } to texts
 }

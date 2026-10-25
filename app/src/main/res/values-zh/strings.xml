@@ -74,11 +74,12 @@
     <string name="label_negative">负向提示词</string>
     <string name="please_select">请选择</string>
     <string name="follow_system">跟随系统</string>
-    <string name="settings_server">ComfyUI 地址</string>
     <string name="settings_test">测试连接</string>
     <string name="settings_testing">测试中…</string>
-    <string name="settings_appearance">外观</string>
     <string name="settings_theme">主题</string>
+    <string name="settings_style">界面风格</string>
+    <string name="style_glass">毛玻璃</string>
+    <string name="style_classic">经典</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
     <string name="settings_language">语言</string>
@@ -99,23 +100,20 @@
     <string name="show_password">显示密码</string>
     <string name="hide_password">隐藏密码</string>
     <string name="auth_needed">需要账号密码（401）</string>
-    <string name="server_history">最近地址</string>
     <string name="settings_current_server">当前服务器</string>
     <string name="action_force_cancel_all">强制结束全部任务</string>
-    <string name="force_cancel_all_body">所有未完成的任务都会标为已取消。</string>
+    <string name="force_cancel_all_body">所有未完成的任务都会标为已取消，并清空当前 ComfyUI 服务器上的队列（包括电脑网页端提交的任务）。服务器连不上时只重置本地。</string>
+    <string name="force_clear_done">已清空服务器队列，本地任务已重置</string>
+    <string name="force_clear_unreachable">服务器没有响应，本地已重置；电脑恢复后可再试一次</string>
+    <string name="force_clear_still_busy">服务器仍有任务在运行：电脑端 ComfyUI 可能卡住了，请在电脑上重启 ComfyUI 后再试</string>
     <string name="field_server_name">名称（可选）</string>
     <string name="action_save_server">保存此服务器</string>
-    <string name="saved_servers">已保存配置</string>
     <string name="saved_servers_empty">还没有保存的服务器。测试连接或保存之后会出现在这里。</string>
-    <string name="server_url_hint">http://192.168.0.1:8188</string>
-    <string name="gacha_url_hint">http://192.168.0.1:8787</string>
+    <string name="server_url_hint">http://电脑IP:8188</string>
+    <string name="gacha_url_hint">例如 http://电脑IP:8787</string>
     <string name="gacha_history_empty">还没有用过的地址</string>
     <string name="action_pick_server">选择已保存的服务器</string>
-    <string name="action_edit_server">编辑服务器</string>
     <string name="action_pick_gacha">选择用过的抽卡地址</string>
-    <string name="preset_servers">一键添加示例</string>
-    <string name="preset_home">家里</string>
-    <string name="preset_away">出门</string>
     <string name="delete_server_title">删除此配置？</string>
     <string name="delete_server_body">仅从已保存列表移除，不影响当前连接。</string>
     <string name="more_settings">更多设置</string>
@@ -137,6 +135,17 @@
     <string name="gacha_latency">延迟 %1$d ms</string>
     <string name="ping_timeout">连接测试超时（65 秒），请稍后重试</string>
     <string name="about_unreleased">待发布</string>
+    <string name="settings_feedback">反馈与建议</string>
+    <string name="settings_feedback_sub">GitHub · Gitee · 复制诊断信息</string>
+    <string name="about_feedback_github">反馈到 GitHub</string>
+    <string name="about_feedback_gitee">反馈到 Gitee</string>
+    <string name="about_feedback_coolapk">酷安反馈</string>
+    <string name="about_copy_diagnostics">复制诊断信息</string>
+    <string name="feedback_copied">已复制</string>
+    <string name="feedback_issue_title">"[反馈] "</string>
+    <string name="feedback_issue_hint">问题描述：\n\n复现步骤：\n\n（可在 App 设置 → 反馈与建议 点「复制诊断信息」后粘贴在下面）</string>
+    <string name="feedback_last_test">最近一次连接测试</string>
+    <string name="choice_cache_stale">选项来自上次缓存，正在刷新…</string>
     <string name="about_version">版本</string>
     <string name="about_system">系统</string>
     <string name="cache_title">缓存管理</string>
@@ -181,8 +190,6 @@
     <string name="i2i_title">用于图生图</string>
     <string name="i2i_body">选择要把这张图交给哪个工作流：</string>
     <string name="import_workflow">导入工作流</string>
-    <string name="workflow_menu">工作流：%1$s ▸</string>
-    <string name="manage_workflows">管理工作流…</string>
     <string name="state_loading">加载中…</string>
     <string name="card_reference">参考图</string>
     <string name="card_count">张数</string>
@@ -190,7 +197,6 @@
     <string name="over_limit">共 %1$d 张：超过上限 8，请减少尺寸或张数</string>
     <string name="card_video">视频参数</string>
     <string name="state_submitting">提交中…</string>
-    <string name="text_open">查看 ▸</string>
     <string name="upload_slow_title">原图上传较慢</string>
     <string name="upload_fail_title">原图上传失败</string>
     <string name="upload_slow_body">已超过 10 秒，当前上传仍在进行，没有被取消。继续上传会接着传；压缩后上传会取消本次传输，改传压缩图。</string>
@@ -248,8 +254,6 @@
     <string name="video_size_warn">参考图 %1$d×%2$d 超过建议 %3$d×%4$d，仍会按原始分辨率提交，显存不足可能失败。</string>
     <string name="video_size_use">将按参考图 %1$d×%2$d 提交。</string>
     <string name="video_size_fallback">无图时用 720P</string>
-    <string name="filter_include">包含</string>
-    <string name="filter_exclude">排除</string>
     <string name="empty_state_no_server">还没连上 ComfyUI</string>
     <string name="empty_state_no_server_body">填上电脑的局域网地址（同一个 Wi-Fi 下），测试连接通过就能用。</string>
     <string name="empty_state_configure_server">去配置服务器</string>
@@ -279,7 +283,6 @@
     <string name="exported_name">已导出「%1$s」</string>
     <string name="export_failed">导出失败：%1$s</string>
     <string name="section_workflows">工作流</string>
-    <string name="imported_at">导入 · %1$s</string>
     <string name="state_importing_long">正在导入，请稍候…</string>
     <string name="workflows_empty">还没有导入的工作流：点右上角「导入工作流」，选一对 workflow + definition 的 .json（或单个 API 格式 .json）</string>
     <string name="state_importing">导入中…</string>
@@ -346,6 +349,7 @@
     <string name="err_query_failed">任务查询失败</string>
     <string name="err_empty_file">文件为空</string>
     <string name="err_video_download">视频下载失败：%1$s</string>
+    <string name="err_image_download">图片下载失败：%1$s</string>
     <string name="err_reference_missing">参考图文件不存在</string>
     <string name="err_upload_failed">上传失败</string>
     <string name="upload_fail_ask">原图上传失败：%1$s，是否尝试压缩后上传？</string>
@@ -366,7 +370,7 @@
     <!-- round13 第 1 项：进度行改为「生成中 · 段1 · 段2」拼接，旧的整句格式废弃 -->
     <string name="phase_running_plain">生成中</string>
     <string name="phase_step_of">%1$d/%2$d 步</string>
-    <string name="phase_video_retry">视频下载失败，点击重试</string>
+    <string name="phase_download_retry">下载失败，点击重试</string>
     <string name="phase_downloading">下载中 %1$s</string>
     <string name="phase_done">完成</string>
     <string name="phase_failed">失败：%1$s</string>
@@ -393,6 +397,9 @@
     <string name="err_join_colon">%1$s：%2$s</string>
     <string name="err_join_semi">%1$s；%2$s</string>
     <string name="err_model_not_found">当前模型不存在：%1$s</string>
+    <string name="err_model_value_not_found">选项不在服务器可选列表里：%1$s</string>
+    <string name="err_model_show_raw">展开原文</string>
+    <string name="err_model_hide_raw">收起原文</string>
     <string name="draw_cat">分类「%1$s」</string>
     <string name="draw_include">包含 %1$s</string>
     <string name="draw_exclude">排除 %1$s</string>
@@ -438,10 +445,9 @@
     <string name="err_album">无法写入相册</string>
     <string name="err_file_missing">文件不存在</string>
     <string name="err_save">保存失败</string>
-    <string name="err_no_remote">服务器上没有对应文件</string>
-    <string name="err_remote_delete">服务器删除失败</string>
     <string name="err_decode">无法解码图片</string>
     <string name="err_net">网络错误</string>
+    <string name="untitled_name">未命名.json</string>
     <string name="action_choose">选择</string>
     <string name="wf_prompt">提示词</string>
     <string name="wf_negative">负向提示词</string>
@@ -483,6 +489,8 @@
     <string name="wf_import_lib">导入库</string>
     <!-- r22 高级抽卡 + 生成按钮 -->
     <string name="gacha_advanced">高级抽卡</string>
+    <string name="gacha_no_server">还没找到抽卡服务</string>
+    <string name="gacha_go_settings">去设置</string>
     <string name="gacha_guide_body">高级抽卡需要电脑上运行抽卡服务 gacha-server-lite：\n1. 克隆仓库（或下载 ZIP）\n2. 装 Python 3.10+，依赖由 start.bat 首次运行时自动安装\n3. 双击 start.bat（默认端口 8787），窗口别关\n4. 在这里填 http://&lt;电脑局域网IP&gt;:8787\n手机和电脑需在同一局域网。</string>
     <string name="gacha_guide_never">不再提示</string>
     <string name="gacha_guide_repo">查看仓库</string>
@@ -533,10 +541,53 @@
     <string name="err_gacha_empty">抽卡服务没有返回提示词</string>
     <string name="err_gacha_http">抽卡服务返回错误（%1$d）</string>
     <string name="scan_action">自动查找</string>
-    <string name="scan_progress">正在扫描 %1$s.0/24… %2$d/%3$d</string>
+    <string name="scan_progress">正在扫描 %2$s.x · 手机 IP %1$s（%3$d/%4$d）</string>
+    <string name="scan_vpn_hint">检测到 VPN，网段可能不对，可以先关闭 VPN 再试</string>
     <string name="scan_need_wifi">连上 Wi-Fi 后可用</string>
     <string name="scan_filled_hint">已填入，点「测试连接」确认</string>
-    <string name="scan_empty">没找到。请确认：手机和电脑在同一个 Wi-Fi；ComfyUI 用 --listen 启动；电脑防火墙放行 8188 / 8787 端口；访客网络、路由器 AP 隔离或手机开着 VPN 都可能扫不到。</string>
+    <string name="scan_empty_lead">没找到。请逐项确认：</string>
+    <string name="scan_check_1">ComfyUI 已启动，并且启动参数带了 --listen</string>
+    <string name="scan_check_2">手机和电脑连的是同一个 Wi-Fi</string>
+    <string name="scan_check_3">手机上的 VPN / 加速器已关闭</string>
+    <string name="scan_check_4">电脑防火墙放行了 8188 端口（抽卡服务是 8787）</string>
+    <string name="scan_check_vpn_on">手机上的 VPN / 加速器已关闭（检测到 VPN 开着）</string>
+    <string name="scan_empty_tail">还不行就手动填地址。</string>
+    <string name="scan_empty_extra">访客网络、路由器 AP 隔离也会导致扫不到</string>
+    <string name="scan_checklist_title">开始前先确认</string>
+    <string name="scan_check_off">不再提示</string>
+    <string name="scan_check_start">开始扫描</string>
+    <string name="scan_fill_manually">手动填地址</string>
+    <string name="scan_close">关闭</string>
+    <!-- r41 局域网权限引导（Android 17 / targetSdk 37 起） -->
+    <string name="lan_perm_title">需要访问局域网</string>
+    <string name="lan_perm_body">手机要连上电脑里的 ComfyUI，安卓 17 起需要单独允许「附近设备」权限。点「去授权」后，系统会弹出授权框。这个权限只用来连你填的服务器和查找局域网里的电脑，不会上传任何东西。</string>
+    <string name="lan_perm_go">去授权</string>
+    <string name="lan_perm_later">暂不</string>
+    <string name="lan_perm_denied_title">还没有局域网权限</string>
+    <string name="lan_perm_denied_body">没有这个权限，手机连不上局域网里的电脑。</string>
+    <string name="lan_perm_open_settings">去系统设置开启</string>
+    <string name="lan_perm_hint">还没允许访问局域网，点这里开启</string>
+    <!-- r41 连接失败分步文案（不出现异常类名） -->
+    <string name="conn_err_bad_url">地址格式不对。例如 http://电脑IP:8188</string>
+    <string name="conn_err_local_net_blocked">连不上局域网里的电脑。安卓 17 需要先在系统设置里允许本应用访问「附近设备」（局域网），再重试。</string>
+    <string name="conn_err_timeout">连接超时。手机和电脑可能不在同一个网络，或电脑防火墙拦了这个端口。</string>
+    <string name="conn_err_refused">电脑拒绝了连接。ComfyUI 可能没启动、端口写错（默认 8188），或没用 --listen 启动。</string>
+    <string name="conn_err_no_route">网络不通。确认手机连的是同一个 Wi-Fi，并关闭 VPN。</string>
+    <string name="conn_err_unknown_host">找不到这个域名，请检查拼写或网络。</string>
+    <string name="conn_err_tls">安全连接失败：证书不被信任，或对方其实不是 https（试试改成 http://）。</string>
+    <string name="conn_err_not_found">这个地址能打开，但不像 ComfyUI（404），检查地址或端口。</string>
+    <string name="conn_err_http_other">服务器返回了错误（HTTP %1$d）。</string>
+    <string name="conn_err_not_comfy">地址能打开，但返回的内容不是 ComfyUI，端口可能填成了别的服务。</string>
+    <string name="conn_err_ws_auth">页面能通，但实时连接需要认证，生成进度可能不显示。</string>
+    <string name="conn_err_ws_rejected">页面能通，但实时连接被服务器拒绝，生成进度可能不显示。</string>
+    <string name="conn_err_ws_failed">页面能通，但实时连接没建立起来，生成进度可能不显示。</string>
+    <string name="err_cannot_connect_lan_permission">无法连接 ComfyUI：请确认服务器已启动、地址端口正确（默认 8188）。安卓 17 还需在系统设置里允许「附近设备」权限。</string>
+    <string name="ping_detail_show">详细信息</string>
+    <string name="ping_detail_copy">复制</string>
+    <string name="err_detail_title">报错详情</string>
+    <string name="err_detail_open">详情</string>
+    <string name="err_detail_copy">复制</string>
+    <string name="err_detail_copied">已复制</string>
     <string name="err_gacha_no_prompt_slot">这个工作流没有提示词栏，抽到的词写不进去</string>
     <string name="draw_library_title">提示词库</string>
     <string name="draw_library_open">选择分类</string>
@@ -553,6 +604,11 @@
     <string name="cancel_gen_body">只取消正在跑的这一条。已经排上的还会继续。</string>
     <string name="cancel_gen_confirm">取消这条</string>
     <string name="cancel_gen_dismiss">先不取消</string>
+    <string name="queue_stuck_hint">排队太久？点按可取消或强制清理</string>
+    <string name="queue_stuck_force_clear">强制清空队列</string>
+    <string name="queue_stuck_dialog_title">任务可能卡住了</string>
+    <string name="queue_stuck_dialog_body">这条任务已超过 5 分钟没有任何进展，电脑端 ComfyUI 可能卡住了</string>
+    <string name="queue_stuck_wait">继续等待</string>
     <plurals name="image_total">
         <item quantity="one">共 %d 张</item>
         <item quantity="other">共 %d 张</item>
@@ -564,10 +620,6 @@
     <plurals name="steps">
         <item quantity="one">%d 步</item>
         <item quantity="other">%d 步</item>
-    </plurals>
-    <plurals name="imported_on">
-        <item quantity="one">%1$d 条 · 导入于 %2$s</item>
-        <item quantity="other">%1$d 条 · 导入于 %2$s</item>
     </plurals>
     <plurals name="entry_count">
         <item quantity="one">%d 条</item>
@@ -599,9 +651,12 @@
     <string name="group_connection">ComfyUI 服务器</string>
     <string name="group_look">外观与语言</string>
     <string name="group_storage">存储与缓存</string>
-    <string name="group_about">关于</string>
     <string name="status_not_set">未设置</string>
     <string name="status_cache">缓存 %1$s</string>
+    <!-- round43：连接状态点（仅无障碍描述用） -->
+    <string name="status_connected">已连接</string>
+    <string name="status_failed">连接失败</string>
+    <string name="status_unknown">未测试</string>
     <!-- round14 -->
     <string name="update_check">检查更新</string>
     <string name="update_checking">正在检查…</string>
@@ -612,6 +667,25 @@
     <string name="update_ignore">忽略此版本</string>
     <string name="update_later">稍后</string>
     <string name="update_no_notes">（无更新说明）</string>
+    <!-- r40 update source -->
+    <string name="update_source">更新下载源</string>
+    <string name="update_source_option_auto">自动</string>
+    <string name="update_source_auto_cn">自动（国内）</string>
+    <string name="update_source_auto_global">自动（国外）</string>
+    <!-- r40 in-app download -->
+    <string name="update_download_install">下载并安装</string>
+    <string name="update_download_cancel">取消下载</string>
+    <string name="update_retry">重试</string>
+    <string name="update_download_browser">用浏览器下载</string>
+    <string name="update_install">安装</string>
+    <string name="update_install_title">安装更新</string>
+    <string name="update_install_permission">需要允许本应用安装更新，去开启</string>
+    <string name="update_install_go">去开启</string>
+    <string name="update_apk_invalid">安装包不对，已删除</string>
+    <string name="update_no_apk">没有可用的下载地址</string>
+    <string name="update_download_failed">下载失败：%1$s</string>
+    <string name="update_download_progress">已下载 %1$s / %2$s MB</string>
+    <string name="update_download_progress_no_total">已下载 %1$s MB</string>
     <string name="info_file_size">文件大小：%1$s</string>
     <string name="info_created_at">生成时间：%1$s</string>
     <string name="size_full">1152×1728 · 2:3 · 全身（默认）</string>

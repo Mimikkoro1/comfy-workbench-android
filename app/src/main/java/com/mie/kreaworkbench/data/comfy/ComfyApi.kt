@@ -1,41 +1,58 @@
 package com.mie.kreaworkbench.data.comfy
 
 import android.content.Context
+import android.os.Build
 import com.mie.kreaworkbench.R
-import com.mie.kreaworkbench.data.BUILTIN_SIZES
 import com.mie.kreaworkbench.ui.locale.str
-import com.mie.kreaworkbench.data.DEFAULT_CLIP
-import com.mie.kreaworkbench.data.DEFAULT_UNET
-import com.mie.kreaworkbench.data.DEFAULT_VAE
-import com.mie.kreaworkbench.data.FALLBACK_SAMPLERS
-import com.mie.kreaworkbench.data.FALLBACK_SCHEDULERS
 import com.mie.kreaworkbench.data.api.ApiException
-import com.mie.kreaworkbench.data.api.ModelCatalog
-import com.mie.kreaworkbench.data.api.PingResult
+import com.mie.kreaworkbench.data.api.ConnError
+import com.mie.kreaworkbench.data.api.ConnErrorKind
+import com.mie.kreaworkbench.data.api.ConnectionReport
+import com.mie.kreaworkbench.data.api.ConnStage
 import com.mie.kreaworkbench.data.api.RemoteImage
 import com.mie.kreaworkbench.data.api.RemoteJob
 import com.mie.kreaworkbench.data.api.RemoteText
 import com.mie.kreaworkbench.data.api.baseUrl
+import com.mie.kreaworkbench.data.api.callBodyText
 import com.mie.kreaworkbench.data.api.callJson
+import com.mie.kreaworkbench.data.api.classifyConnectionError
 import com.mie.kreaworkbench.data.api.imageUrl
+import com.mie.kreaworkbench.data.api.isComfyStats
 import com.mie.kreaworkbench.data.api.jsonBody
 import com.mie.kreaworkbench.data.api.jsonClient
 import com.mie.kreaworkbench.data.api.parseOutputEntries
 import com.mie.kreaworkbench.data.api.strings
+import com.mie.kreaworkbench.data.api.techSummary
 import com.mie.kreaworkbench.data.api.trimBase
+import com.mie.kreaworkbench.data.api.WsHandshakeOutcome
+import com.mie.kreaworkbench.data.api.wsProbeError
 import com.mie.kreaworkbench.data.db.GalleryDb
+import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
+import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
 import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.data.workflows.WorkflowStore
 import com.mie.kreaworkbench.data.workflows.baseClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Credentials
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.Proxy
 import java.net.URLEncoder
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /** 导入时按 class 查 /object_info 的结果。failed 是网络失败，不是「节点不存在」。 */
 data class NodeLookup(val node: JSONObject?, val failed: Boolean)
@@ -53,7 +70,17 @@ class ComfyApi(
     private val http = jsonClient(auth)
     private val progress = ComfyProgress(settings, auth)
 
-    @Volatile private var catalogCache: ModelCatalog? = null
+    // r41 测试连接专用探测客户端：更短的超时、不重试；HTTP 与 WS 探测共用
+    private val diagClient = OkHttpClient.Builder()
+        .proxy(Proxy.NO_PROXY)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
+
+    // r42：原 catalogCache / models() 已删——没有读者（UI 选项走 modelChoices/comboChoices，
+    // 本地持久缓存见 data/comfy/ChoiceCache.kt）。
 
     /** /queue 短缓存（round13 第 1 项）：多任务并发轮询在同一秒内共享一份队列快照。
      *  每个任务的 poll 每 1.5s 都要拉 /queue + n 个 /history，N 个任务并发时 /queue 请求量翻 N 倍，
@@ -96,54 +123,108 @@ class ComfyApi(
         return resp
     }
 
-    suspend fun ping(base: String, user: String = "", pass: String = ""): PingResult {
+    /**
+     * r41：分步探测，测试连接用（r45 起探测入口只此一处）。
+     * ①地址格式 → ②GET /system_stats（带 Basic Auth，同 ping）→ ③isComfyStats 内容校验 →
+     * ④仅当②③都过，再做 WS 握手探测（6 秒内 onOpen 即算通，立刻 close）。
+     * WS 失败不阻止保存——出图只靠 HTTP，缺的只是步数进度。
+     */
+    suspend fun diagnose(base: String, user: String = "", pass: String = ""): ConnectionReport {
         val b = trimBase(base)
-        if (b.isBlank()) throw ApiException(ctx.str(R.string.ping_need_server))
+        if (b.isBlank()) {
+            return ConnectionReport(
+                httpOk = false, version = "", latencyMs = 0,
+                error = ConnError(ConnErrorKind.BAD_URL, null, "unparseable base url: " + base.take(120)),
+                wsError = null, detail = "",
+            )
+        }
+        val sdk = Build.VERSION.SDK_INT
+        val granted = isLocalNetworkGranted(ctx)
+        val hostIsLocal = urlTargetsLocalNetwork(b)
+        val auth = if (user.isNotBlank()) Credentials.basic(user, pass) else null
         val t = System.nanoTime()
-        val json = http.callJson({
-            val rb = Request.Builder().url(b + "/system_stats").get()
-            if (user.isNotBlank()) rb.header("Authorization", Credentials.basic(user, pass))
-            rb.build()
-        }, idempotent = true, attempts = 1)
+        val (code, text) = try {
+            diagClient.callBodyText {
+                val rb = Request.Builder().url(b + "/system_stats").get()
+                if (auth != null) rb.header("Authorization", auth)
+                rb.build()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val ms = (System.nanoTime() - t) / 1_000_000
+            return ConnectionReport(
+                httpOk = false, version = "", latencyMs = ms,
+                error = ConnError(
+                    classifyConnectionError(ConnStage.HTTP, e, null, sdk, granted, hostIsLocal),
+                    null,
+                    techSummary(e),
+                ),
+                wsError = null, detail = "",
+            )
+        }
         val ms = (System.nanoTime() - t) / 1_000_000
-        val version = json.optJSONObject("system")?.optString("comfyui_version").orEmpty()
-        return PingResult(
-            workbenchVersion = if (version.isBlank()) "ComfyUI" else "ComfyUI $version",
-            comfyOk = true,
-            comfyUrl = b,
+        if (code !in 200..299 || !isComfyStats(code, text)) {
+            return ConnectionReport(
+                httpOk = false, version = "", latencyMs = ms,
+                error = ConnError(
+                    classifyConnectionError(ConnStage.CONTENT, null, code, sdk, granted, hostIsLocal),
+                    code,
+                    "HTTP $code, body head: " + text.take(160),
+                ),
+                wsError = null, detail = "",
+            )
+        }
+        val version = try {
+            JSONObject(text).optJSONObject("system")?.optString("comfyui_version").orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        val wsError = probeWebSocket(b, auth, sdk, granted, hostIsLocal)
+        return ConnectionReport(
+            httpOk = true,
+            version = if (version.isBlank()) "ComfyUI" else "ComfyUI $version",
             latencyMs = ms,
+            error = null,
+            wsError = wsError,
+            detail = "",
         )
     }
 
-    suspend fun models(refresh: Boolean): ModelCatalog {
-        if (!refresh) catalogCache?.let { return it }
-        val defaults = JSONObject()
-            .put("unet", DEFAULT_UNET)
-            .put("clip", DEFAULT_CLIP)
-            .put("vae", DEFAULT_VAE)
-            .put("steps", 8)
-            .put("cfg", 1)
-            .put("sampler", "euler")
-            .put("scheduler", "simple")
-            .put("shift", 3)
-            .put("denoise", 0.55)
-        // 拉取过程一旦失败（401/超时/断网）直接上抛：绝不把空列表写进 catalogCache，
-        // 否则 KSampler 选项会以「空下拉」的形态被缓存住（round13 第 4 项的根因之一）。
-        // 失败时保留旧缓存（refresh 重试失败也退回旧值），调用方自行提示。
-        val cat = ModelCatalog(
-            // 任务书写的 source="comfy"，但 ModelsScreen 只认 "object_info"/"filesystem"，
-            // 沿用 UI 已有约定值以正确显示「来源：ComfyUI」
-            source = "object_info",
-            unet = objectInfoList("UNETLoader", "unet_name"),
-            clip = objectInfoList("CLIPLoader", "clip_name"),
-            vae = objectInfoList("VAELoader", "vae_name"),
-            samplers = objectInfoList("KSampler", "sampler_name").ifEmpty { FALLBACK_SAMPLERS },
-            schedulers = objectInfoList("KSampler", "scheduler").ifEmpty { FALLBACK_SCHEDULERS },
-            defaults = defaults,
-            sizePresets = BUILTIN_SIZES.map { Triple(it.label, it.width, it.height) },
-        )
-        catalogCache = cat
-        return cat
+    /**
+     * WS 握手探测：不用真实 comfyClientId（探测连接绝不能顶掉正在跑任务的进度连接），
+     * 用一次性 kwb-probe-<uuid>。6 秒内 onOpen 即算通并立刻 close(1000)。
+     * r41.1：结局用 WsHandshakeOutcome（Opened/Failed）区分，只有等不到结局（超时）才落到 null——
+     * 之前成功也 resume(null)，和超时的 null 混在一起，连上了也被当成超时报 WS 失败。
+     */
+    private suspend fun probeWebSocket(base: String, auth: String?, sdk: Int, granted: Boolean, hostIsLocal: Boolean): ConnError? {
+        val httpish = base.toHttpUrlOrNull()
+            ?: return ConnError(ConnErrorKind.WS_FAILED, null, "unparseable base for ws probe")
+        // OkHttp 的 HttpUrl 不认 ws/wss，先用 http(s) 建请求，newWebSocket 自己升级协议
+        val scheme = if (httpish.isHttps) "https" else "http"
+        val probeUrl = "$scheme://${httpish.host}:${httpish.port}/ws?clientId=kwb-probe-${UUID.randomUUID()}"
+        val rb = Request.Builder().url(probeUrl)
+        if (auth != null) rb.header("Authorization", auth)
+        val outcome = withTimeoutOrNull(6_000L) {
+            suspendCancellableCoroutine<WsHandshakeOutcome> { cont ->
+                val ws = diagClient.newWebSocket(rb.build(), object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        webSocket.close(1000, "probe done")
+                        if (cont.isActive) cont.resume(WsHandshakeOutcome.Opened)
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        if (cont.isActive) cont.resume(WsHandshakeOutcome.Opened)
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        if (cont.isActive) cont.resume(WsHandshakeOutcome.Failed(t, response?.code))
+                    }
+                })
+                cont.invokeOnCancellation { runCatching { ws.cancel() } }
+            }
+        }
+        return wsProbeError(outcome, sdk, granted, hostIsLocal)
     }
 
     /**
@@ -159,13 +240,22 @@ class ComfyApi(
             if (e.code == 404) return emptyList()
             throw e
         }
-        return json.optJSONObject(cls)
+        val declared = json.optJSONObject(cls)
             ?.optJSONObject("input")
             ?.optJSONObject("required")
             ?.optJSONArray(field)
-            ?.optJSONArray(0)
-            ?.strings()
-            ?: emptyList()
+            ?: return emptyList()
+        // r44：combo 声明兼容两种格式——老 [[...]] 与新 ["COMBO",{"options":[...]}]
+        return when (val first = declared.opt(0)) {
+            is JSONArray -> first.strings()
+            is String ->
+                if (first == "COMBO") {
+                    declared.optJSONObject(1)?.optJSONArray("options")?.strings().orEmpty()
+                } else {
+                    emptyList()
+                }
+            else -> emptyList()
+        }
     }
 
     /** 导入工作流的 model spec 下拉选项：/object_info/<该节点 class_type> 的同名字段列表（只读 GET）。 */
@@ -355,6 +445,8 @@ class ComfyApi(
         var runningCount = 0
         var minPending: Int? = null
         var firstError: String? = null
+        // r42：失败详情（WS 缓存优先、history 的 execution_error 兜底；按 prompt 去重只取第一条）
+        var errorDetail: String? = null
         val images = ArrayList<RemoteImage>(n)
         val videos = ArrayList<RemoteImage>()
         val texts = ArrayList<RemoteText>()
@@ -434,14 +526,24 @@ class ComfyApi(
                         firstError = executionMessage(status.optJSONArray("messages"))
                             ?: ctx.str(R.string.err_image_failed, index)
                     }
+                    // r42：WS 的 execution_error 可能先于/晚于 history 到达，这里 WS 优先、history 补缺
+                    if (errorDetail == null) {
+                        val e = progress.errorOf(pid)?.let { runCatching { formatExecError(it) }.getOrNull() }
+                        errorDetail = e ?: executionErrorDetail(status.optJSONArray("messages"), pid)
+                    }
                 }
                 status.optBoolean("completed") && status.optString("status_str") == "success" -> {
                     doneCount++
                     val outputs = h.optJSONObject("outputs") ?: JSONObject()
                     if (isCustom) {
                         // round6：custom 不只信指定输出节点，遍历所有输出节点收集
-                        // images/gifs/videos（视频在 gifs）与 text/string，图文视频混合全收
-                        val (entries, outTexts) = parseOutputEntries(outputs)
+                        // images/gifs/videos（视频在 gifs）与 text/string，图文视频混合全收。
+                        // r44：有 SaveImage 类产物时丢弃 PreviewImage 等 temp 预览；
+                        // 定义里指定了出图节点（kwb_output_node → body.output_node）的排最前。
+                        val (entries, outTexts) = parseOutputEntries(
+                            outputs,
+                            body.optString("output_node").ifBlank { null },
+                        )
                         for (t in outTexts) texts.add(RemoteText(index = index, text = t))
                         for ((j, e) in entries.withIndex()) {
                             if (e.video) {
@@ -545,6 +647,7 @@ class ComfyApi(
             texts = texts,
             stage = stage,
             error = firstError,
+            errorDetail = errorDetail,
         )
     }
 
@@ -731,6 +834,99 @@ class ComfyApi(
         }
     }
 
+    /** r44 强制结束的服务器清空结果：reachable=false 表示连不上（本地仍会重置）。 */
+    data class ServerQueueClear(val reachable: Boolean, val runningLeft: Int, val pendingLeft: Int)
+
+    /** r44 冷启动对账的只读探测结果：该任务已提交的 prompt 是否还有任何一个在队列 / 历史里。 */
+    data class ServerProbe(val reachable: Boolean, val inQueue: Boolean, val inHistory: Boolean)
+
+    /**
+     * 只读探测（对账专用，不改任何状态）：一次 GET /queue + 逐个 GET /history/{pid}。
+     * 在队列里就不再查历史（KEEP 的判定用不到）；返回 null = 服务器不可达，调用方一律不改本地状态。
+     */
+    suspend fun probeServer(clientId: String): ServerProbe? {
+        val row = db.job(clientId) ?: return null
+        val pids = ArrayList<String>()
+        try {
+            val arr = JSONObject(row.requestJson).optJSONArray("comfy_prompts") ?: return null
+            for (i in 0 until arr.length()) {
+                val pid = arr.optJSONObject(i)?.optString("prompt_id").orEmpty()
+                if (pid.isNotBlank()) pids.add(pid)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        if (pids.isEmpty()) return null
+        return try {
+            val q = get("/queue", attempts = 1)
+            val inQueue = queueContains(q, pids)
+            var inHistory = false
+            if (!inQueue) {
+                for (pid in pids) {
+                    if (get("/history/$pid", attempts = 1).has(pid)) {
+                        inHistory = true
+                        break
+                    }
+                }
+            }
+            ServerProbe(reachable = true, inQueue = inQueue, inHistory = inHistory)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun queueContains(q: JSONObject, pids: List<String>): Boolean {
+        val want = pids.toHashSet()
+        for (key in listOf("queue_running", "queue_pending")) {
+            val arr = q.optJSONArray(key) ?: continue
+            for (i in 0 until arr.length()) {
+                val pid = arr.optJSONArray(i)?.optString(1).orEmpty()
+                if (pid in want) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * r44：把当前配置的这台服务器的队列**整个**清掉——先 POST /queue {"clear":true} 清 pending，
+     * 再 POST /interrupt 中断正在跑的（顺序不能反，反过来 interrupt 后下一条 pending 会立刻顶上来开跑），
+     * 最后 GET /queue 确认还剩几条（给 Comfy 500ms 反应时间，最多复查一次）。
+     *
+     * 不按 prompt_id 过滤：这是「把这台 Comfy 的队列全清掉」，包括电脑网页端用户提交的任务
+     * （调用方的弹窗必须已写明）。任何失败都不抛，返回 reachable=false 交给调用方提示。
+     */
+    suspend fun clearServerQueue(): ServerQueueClear {
+        val unreachable = ServerQueueClear(reachable = false, runningLeft = 0, pendingLeft = 0)
+        return try {
+            withTimeoutOrNull(SERVER_CLEAR_BUDGET_MS) {
+                post("/queue", JSONObject().put("clear", true), idempotent = false)
+                post("/interrupt", JSONObject(), idempotent = false)
+                delay(500)
+                var left = queueLeftCounts(get("/queue", attempts = 1))
+                if (left.first > 0 || left.second > 0) {
+                    delay(700)
+                    left = queueLeftCounts(get("/queue", attempts = 1))
+                }
+                ServerQueueClear(reachable = true, runningLeft = left.first, pendingLeft = left.second)
+            } ?: unreachable
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            unreachable
+        }
+    }
+
+    private fun queueLeftCounts(q: JSONObject): Pair<Int, Int> =
+        (q.optJSONArray("queue_running")?.length() ?: 0) to (q.optJSONArray("queue_pending")?.length() ?: 0)
+
+    /** r44：强制结束后清掉「任务丢失」计数与 /queue 缓存，幽灵排队不再靠轮询自己恢复。 */
+    fun resetLocalTracking() {
+        promptMisses.clear()
+        queueSnaps.invalidate()
+    }
+
     suspend fun cancelJob(jobId: String) {
         val clientId = jobId.removePrefix("cq_")
         val ids = ArrayList<String>()
@@ -787,10 +983,50 @@ class ComfyApi(
         return null
     }
 
+    /** r42：history status.messages 里的 execution_error 详情（持久、不依赖 WS 时序）；没有返回 null。
+     *  消息里缺 prompt_id 时用 [promptId]（history 实际 pid）补。 */
+    private fun executionErrorDetail(messages: JSONArray?, promptId: String): String? {
+        if (messages == null) return null
+        for (i in 0 until messages.length()) {
+            val m = messages.optJSONArray(i) ?: continue
+            if (m.optString(0) != "execution_error") continue
+            val data = m.optJSONObject(1) ?: return null
+            if (data.optString("prompt_id").isBlank() && promptId.isNotBlank()) {
+                data.put("prompt_id", promptId)
+            }
+            val e = runCatching { parseExecutionError(data) }.getOrNull() ?: return null
+            return runCatching { formatExecError(e) }.getOrNull()
+        }
+        return null
+    }
+
+    /**
+     * r42：poll 发现失败后再取一次 WS 缓存的详情（WS 消息可能晚于 history 到达）。
+     * 按 clientId 对应的 comfy_prompts 里的 prompt_id 找，不按「最近一条」；取不到返回 null，不阻塞。
+     */
+    suspend fun lateErrorDetail(jobId: String): String? {
+        val clientId = jobId.removePrefix("cq_")
+        val row = db.job(clientId) ?: return null
+        val prompts = try {
+            JSONObject(row.requestJson).optJSONArray("comfy_prompts")
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        for (i in 0 until prompts.length()) {
+            val pid = prompts.optJSONObject(i)?.optString("prompt_id") ?: continue
+            val e = progress.errorOf(pid) ?: continue
+            return runCatching { formatExecError(e) }.getOrNull()
+        }
+        return null
+    }
+
     private companion object {
         const val SAVE_NODE = "16"
 
         /** /queue 共享缓存窗口：轮询周期 1.5s，窗口取 1s 保证每个周期至少刷新一次。 */
         const val QUEUE_CACHE_MS = 1000L
+
+        /** r44 清空服务器队列的总时长上限：连不上时不能把「强制结束」一直挂着。 */
+        const val SERVER_CLEAR_BUDGET_MS = 8_000L
     }
 }

@@ -1,8 +1,11 @@
 package com.mie.kreaworkbench.data.api
 
 import android.content.Context
+import android.os.Build
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.data.net.LOCAL_NETWORK_ENFORCED_SDK
+import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
 import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.ui.locale.localized
 import com.mie.kreaworkbench.ui.locale.str
@@ -69,27 +72,6 @@ fun trimBase(url: String): String {
     return if (withScheme.toHttpUrlOrNull() != null) withScheme else ""
 }
 
-/**
- * 地址输入框的规范化（round34）：去首尾空格、全角冒号/斜杠转半角、没写 scheme 补 http://
- * （大写 HTTP:// 也认，统一转小写），最后交 trimBase 清洗与 HttpUrl 强校验。
- * 空串、没有主机名（「http://」「：8188」）或解析不过返回 null，调用方就地提示。
- * 只在点「测试连接」或落库前用，输入过程中不调用。
- */
-fun normalizeServerUrl(raw: String): String? {
-    if (raw.isBlank()) return null
-    var s = raw.trim().replace('：', ':').replace('／', '/')
-    s = if (s.startsWith("http://", true) || s.startsWith("https://", true)) {
-        val idx = s.indexOf("://")
-        s.substring(0, idx).lowercase() + s.substring(idx)
-    } else {
-        "http://$s"
-    }
-    val host = s.substringAfter("://").substringBefore('/')
-        .substringBefore('?').substringBefore('#').substringAfterLast('@')
-    if (host.isBlank() || host.startsWith(':')) return null
-    return trimBase(s).ifBlank { null }
-}
-
 /** 配置的 ComfyUI 地址；空 = 未配置。 */
 suspend fun SettingsStore.baseUrl(): String {
     val u = trimBase(current().serverUrl)
@@ -97,11 +79,27 @@ suspend fun SettingsStore.baseUrl(): String {
     return u
 }
 
-private val BACKOFF = longArrayOf(0L, 1000L, 3000L, 6000L)
+/** 网络请求重试的退避表（毫秒）；第 1 次尝试不等。Http.callJson 与 Transfer 共用（Transfer 在第 8 项接入）。 */
+internal val RETRY_BACKOFF_MS = longArrayOf(0L, 1000L, 3000L, 6000L)
+
+/** 默认重试次数 = 退避表长度。 */
+internal val RETRY_ATTEMPTS: Int get() = RETRY_BACKOFF_MS.size
+
+/** 第 i 次尝试前的等待；i 越界时按最后一档，i < 0 当 0。永不抛异常。 */
+internal fun backoffDelayMs(i: Int): Long = RETRY_BACKOFF_MS[i.coerceIn(0, RETRY_BACKOFF_MS.size - 1)]
 
 fun friendlyIo(cause: Throwable? = null): ApiException =
     ApiException(
-        KreaApp.instance.str(R.string.err_cannot_connect),
+        // r41：连接类失败且安卓 17 未给局域网权限时，提示里带上权限这条（公网用户也会看到这句，可接受；
+        // friendlyIo 是同步函数，不去读 DataStore 判断目标是不是局域网）
+        if (isUnreachable(cause) &&
+            Build.VERSION.SDK_INT >= LOCAL_NETWORK_ENFORCED_SDK &&
+            !isLocalNetworkGranted(KreaApp.instance)
+        ) {
+            KreaApp.instance.str(R.string.err_cannot_connect_lan_permission)
+        } else {
+            KreaApp.instance.str(R.string.err_cannot_connect)
+        },
         network = true,
         unreachable = isUnreachable(cause),
     )
@@ -132,11 +130,12 @@ private fun isUnreachable(cause: Throwable?): Boolean {
 suspend fun OkHttpClient.callJson(
     build: () -> Request,
     idempotent: Boolean,
-    attempts: Int = if (idempotent) 4 else 1,
+    attempts: Int = if (idempotent) RETRY_ATTEMPTS else 1,
 ): JSONObject {
     var last: Exception? = null
     for (i in 0 until attempts) {
-        if (BACKOFF[i] > 0) delay(BACKOFF[i])
+        val wait = backoffDelayMs(i)
+        if (wait > 0) delay(wait)
         try {
             val (code, text) = awaitText(build)
             return parseJson(code, text, idempotent, i, attempts)
@@ -187,10 +186,11 @@ private fun parseJson(code: Int, text: String, idempotent: Boolean, attempt: Int
         // 401 是凭据缺失/错误，不是网络问题：明确报错，绝不进重试循环
         if (code == 401) throw authError()
         val err = errorText(json) ?: httpFallback(code)
+        // r44：原始报错随异常带出去（error 是对象形状时才有），给「展开原文」
         if (idempotent && code >= 500 && attempt < attempts - 1) {
-            throw ApiException(err, network = true, code = code)
+            throw ApiException(err, network = true, code = code, raw = rawErrorText(json))
         }
-        throw ApiException(err, network = code >= 500, code = code)
+        throw ApiException(err, network = code >= 500, code = code, raw = rawErrorText(json))
     }
     if (json.has("ok") && !json.optBoolean("ok")) {
         throw ApiException(json.optString("error", KreaApp.instance.str(R.string.err_request_failed)))
@@ -239,23 +239,32 @@ private val MODEL_FILE_FIELDS = setOf(
 /**
  * r37.1：预填/保存的模型文件服务器上没有时，ComfyUI 拒任务（400）并在 error/node_errors 里报
  * value_not_in_list，原文（Prompt outputs failed validation: Value not in list: vae_name: ...）
- * 全是内部信息。这里收集所有缺失的模型文件名，翻成一句用户能看懂的话（多个文件按当前语言拼接）；
- * 没有模型类缺失返回 null，走原有格式化。
+ * 全是内部信息。这里收集所有缺失的名字翻成用户能看懂的一句话；没有 value_not_in_list 返回 null。
+ *
+ * r44 放宽：value_not_in_list 命中任何字段都收集（只要 details 能解析出「'名字' not in [」），
+ * 模型文件字段归 modelNames，其它 combo 选项值归 optionNames。候选列表（[...] 一大坨）不进摘要。
  */
-private fun modelMissingText(json: JSONObject, app: Context): String? {
-    val missing = LinkedHashSet<String>()
+internal fun missingValueNames(json: JSONObject): Pair<List<String>, List<String>> {
+    val modelNames = LinkedHashSet<String>()
+    val optionNames = LinkedHashSet<String>()
+    val quoted = Regex("'(.+?)'\\s+not\\s+in\\s+\\[")
     fun scan(errs: JSONArray?) {
         if (errs == null) return
         for (i in 0 until errs.length()) {
             val o = errs.optJSONObject(i) ?: continue
             if (o.optString("type") != "value_not_in_list") continue
             val details = o.optString("details")
-            // 字段名优先取 extra_info.input_name，格式变了也有兜底；值是 details 冒号后的引号内文件名
+            // 字段名优先取 extra_info.input_name，格式变了也有兜底
             val field = o.optJSONObject("extra_info")?.optString("input_name").orEmpty()
                 .ifBlank { details.substringBefore(':').trim() }
-            if (field !in MODEL_FILE_FIELDS) continue
-            val name = details.substringAfter(':', "").trim().trim('\'', '"')
-            if (name.isNotBlank()) missing.add(name)
+            val match = quoted.find(details)?.groupValues?.get(1)?.trim().orEmpty()
+            if (field in MODEL_FILE_FIELDS) {
+                // 模型文件字段：正则解析不到时沿用 r37.1 的截取，老报错格式不回退
+                val name = match.ifBlank { details.substringAfter(':', "").trim().trim('\'', '"') }
+                if (name.isNotBlank()) modelNames.add(name)
+            } else if (match.isNotBlank()) {
+                optionNames.add(match)
+            }
         }
     }
     scan(json.optJSONObject("error")?.optJSONArray("errors"))
@@ -264,9 +273,49 @@ private fun modelMissingText(json: JSONObject, app: Context): String? {
         val keys = nodeErrors.keys()
         while (keys.hasNext()) scan(nodeErrors.optJSONObject(keys.next())?.optJSONArray("errors"))
     }
-    if (missing.isEmpty()) return null
+    return modelNames.toList() to optionNames.toList()
+}
+
+private fun modelMissingText(json: JSONObject, app: Context): String? {
+    val (modelNames, optionNames) = missingValueNames(json)
+    if (modelNames.isEmpty() && optionNames.isEmpty()) return null
     val zh = app.localized().resources.configuration.locales[0].language == "zh"
-    return app.str(R.string.err_model_not_found, missing.joinToString(if (zh) "、" else ", "))
+    val sep = if (zh) "、" else ", "
+    // 纯模型文件 → 「当前模型不存在」；混有 combo 选项值 → 「选项不在服务器可选列表里」
+    return if (optionNames.isEmpty()) {
+        app.str(R.string.err_model_not_found, modelNames.joinToString(sep))
+    } else {
+        app.str(R.string.err_model_value_not_found, (modelNames + optionNames).joinToString(sep))
+    }
+}
+
+/**
+ * r44：把 ComfyUI 的原始报错拼成多行文本（error.message / details + 每条 node_errors），
+ * 随异常带出去给「展开原文」；纯字符串 error 没有原文。截断到 8000 字符防极端长选项列表。
+ */
+private fun rawErrorText(json: JSONObject): String? {
+    val e = json.optJSONObject("error") ?: return null
+    val lines = ArrayList<String>()
+    val msg = e.optString("message")
+    if (msg.isNotBlank()) lines.add(msg)
+    val details = e.optString("details")
+    if (details.isNotBlank()) lines.add(details)
+    val nodeErrors = json.optJSONObject("node_errors")
+    if (nodeErrors != null) {
+        val keys = nodeErrors.keys()
+        while (keys.hasNext()) {
+            val errs = nodeErrors.optJSONObject(keys.next())?.optJSONArray("errors") ?: continue
+            for (i in 0 until errs.length()) {
+                val o = errs.optJSONObject(i) ?: continue
+                val m = o.optString("message")
+                if (m.isNotBlank()) lines.add(m)
+                val d = o.optString("details")
+                if (d.isNotBlank()) lines.add(d)
+            }
+        }
+    }
+    if (lines.isEmpty()) return null
+    return lines.joinToString("\n").take(RAW_ERROR_MAX_CHARS)
 }
 
 fun httpFallback(code: Int): String = if (code == 401) {
@@ -278,3 +327,6 @@ fun httpFallback(code: Int): String = if (code == 401) {
 fun authError(): ApiException = ApiException(KreaApp.instance.str(R.string.err_auth_failed), network = false, auth = true)
 
 fun jsonBody(obj: JSONObject) = obj.toString().toRequestBody(JSON_MEDIA)
+
+/** r44：原始报错文本的长度上限。 */
+private const val RAW_ERROR_MAX_CHARS = 8000

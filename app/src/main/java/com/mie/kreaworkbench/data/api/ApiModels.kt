@@ -6,13 +6,15 @@ import org.json.JSONObject
 /** network=true 可自动重试；auth=true 是凭据问题（401），调用方应提示而非重试。
  *  code 是 HTTP 状态码（非 HTTP 来源的异常为 0）：调用方据此区分 404（资源不存在）与其他失败。
  *  unreachable=true（round31）表示连接压根没建立：拒连 / 域名解析不了 / 无路由 / 连接超时。
- *  这类错误重试也不会自己好，提交阶段据此立刻判失败，而不是拖满重试窗口后 pause 假死。 */
+ *  这类错误重试也不会自己好，提交阶段据此立刻判失败，而不是拖满重试窗口后 pause 假死。
+ *  raw（r44）：服务器的原始报错文本（error.message + 各条 details），给「展开原文」用；没有为 null。 */
 class ApiException(
     message: String,
     val network: Boolean = false,
     val auth: Boolean = false,
     val code: Int = 0,
     val unreachable: Boolean = false,
+    val raw: String? = null,
 ) : Exception(message)
 
 data class RemoteImage(
@@ -51,24 +53,8 @@ data class RemoteJob(
     val texts: List<RemoteText> = emptyList(),
     val stage: String = "",
     val error: String?,
-)
-
-data class ModelCatalog(
-    val source: String,
-    val unet: List<String>,
-    val clip: List<String>,
-    val vae: List<String>,
-    val samplers: List<String>,
-    val schedulers: List<String>,
-    val defaults: JSONObject,
-    val sizePresets: List<Triple<String, Int, Int>>,
-)
-
-data class PingResult(
-    val workbenchVersion: String,
-    val comfyOk: Boolean,
-    val comfyUrl: String,
-    val latencyMs: Long,
+    /** r42：ComfyUI execution_error 的详细报错（节点/异常/调用栈，可展开可复制）；没有为 null。 */
+    val errorDetail: String? = null,
 )
 
 fun JSONArray.strings(): List<String> = buildList {

@@ -20,6 +20,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,6 +43,13 @@ val PhotoOnBackdrop = Color(0xFFFFFFFF)
 val PhotoScrim = Color(0xCC000000)
 
 val LocalIsDark = staticCompositionLocalOf { false }
+
+/** r46 界面风格。默认 GLASS：没有 provider 的地方（预览、测试、漏包的子树）自动是毛玻璃。 */
+val LocalThemeKind = staticCompositionLocalOf { ThemeKind.GLASS }
+
+@Composable
+@ReadOnlyComposable
+fun isClassic(): Boolean = LocalThemeKind.current == ThemeKind.CLASSIC
 
 val KreaShapes = Shapes(
     extraSmall = RoundedCornerShape(6.dp),

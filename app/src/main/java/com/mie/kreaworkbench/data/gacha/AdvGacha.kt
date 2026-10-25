@@ -14,8 +14,8 @@ import org.json.JSONObject
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 
-/** 电脑上文字抽卡页的默认地址（示例地址，和 Comfy 默认内网地址同一类）。 */
-const val DEFAULT_ADV_GACHA_URL = "http://192.168.1.100:8787"
+/** r40 起默认为空：没地址就不发请求、抽卡区显示「还没找到抽卡服务」，不再回落到对别人连不上的假地址。 */
+const val DEFAULT_ADV_GACHA_URL = ""
 
 /** 抽卡服务仓库。空着时引导框不显示链接。 */
 const val GACHA_SERVICE_REPO_URL = "https://github.com/Mimikkoro1/gacha-server-lite"

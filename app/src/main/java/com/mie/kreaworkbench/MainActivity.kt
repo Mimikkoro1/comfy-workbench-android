@@ -30,6 +30,9 @@ import com.mie.kreaworkbench.ui.motion.LocalSharedScope
 import com.mie.kreaworkbench.ui.nav.AppNav
 import com.mie.kreaworkbench.ui.nav.NavModel
 import com.mie.kreaworkbench.ui.theme.KreaTheme
+import com.mie.kreaworkbench.ui.theme.LocalThemeKind
+import com.mie.kreaworkbench.ui.theme.ThemeKind
+import com.mie.kreaworkbench.ui.theme.resolveThemeKind
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 class MainActivity : AppCompatActivity() {
@@ -107,6 +110,8 @@ class MainActivity : AppCompatActivity() {
         setContent {
             val app = application as KreaApp
             val settings by app.container.settings.flow.collectAsState(initial = UserSettings())
+            val kind = resolveThemeKind(settings.uiStyle)
+            CompositionLocalProvider(LocalThemeKind provides kind) {
             KreaTheme(settings.themeMode, settings.dynamicColor, settings.amoled) {
                 val nav: NavModel = viewModel()
                 // round14：GitHub 新版本对话框（自动检查或关于页手动检查后弹）。
@@ -115,7 +120,7 @@ class MainActivity : AppCompatActivity() {
                 val blur = settings.blurEnabled && Build.VERSION.SDK_INT >= 31
                 CompositionLocalProvider(
                     LocalHazeState provides haze,
-                    LocalBlurEnabled provides blur,
+                    LocalBlurEnabled provides (blur && kind != ThemeKind.CLASSIC),
                 ) {
                     AppToaster {
                         SharedTransitionLayout(Modifier.fillMaxSize()) {
@@ -127,6 +132,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+            }
             }
             if (showBatteryHint.value) {
             androidx.compose.material3.AlertDialog(

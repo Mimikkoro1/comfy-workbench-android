@@ -98,6 +98,7 @@ import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassBottomSheet
 import com.mie.kreaworkbench.ui.components.GlassDanger
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.LocalOverPhoto
 import com.mie.kreaworkbench.ui.components.LocalGlassDismiss
 import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.SaveToLibrarySheet
@@ -180,6 +181,8 @@ fun ViewerScreen(
     val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val spatial = MaterialTheme.motionScheme.fastSpatialSpec<IntOffset>()
     CompositionLocalProvider(LocalContentColor provides PhotoOnBackdrop) {
+        // r46：看图页整页压在照片上，经典主题里页内文字/图标仍保持白字。
+        CompositionLocalProvider(LocalOverPhoto provides true) {
         Box(Modifier.fillMaxSize().background(PhotoBackdrop.copy(alpha = bgAlpha))) {
             HorizontalPager(
                 state = pager,
@@ -320,6 +323,7 @@ fun ViewerScreen(
                     IconButton(onClick = { confirm = true }) { Icon(Lucide.Trash2, stringResource(R.string.action_delete), tint = PhotoOnBackdrop) }
                 }
             }
+        }
         }
     }
     if (info) InfoSheet(current) { info = false }

@@ -35,10 +35,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.RefreshCw
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassCard
@@ -85,7 +87,7 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
     val currentName = if (vm.displayName.isBlank()) "…" else knownText(vm.displayName)
     // r13fix2：与生成/工作流/设置三个 tab 一样用 ScreenHeader 渲染主标题（不再用 LargeBarScaffold，
     // 其 LargeFlexibleTopAppBar 顶部固有一行 64dp 小栏，会把大标题整体往下压），刷新按钮放在同一行右侧
-    CompositionLocalProvider(LocalGlassFields provides true) {
+    CompositionLocalProvider(LocalGlassFields provides !isClassic()) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader(stringResource(R.string.title_models), ink = ImmersiveInk, actions = {
                 IconButton(
@@ -156,6 +158,11 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
                         GlassCard(padding = 12.dp, glassFields = true) {
                             Text(stringResource(R.string.label_model), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = ImmersiveInk)
                             Spacer(Modifier.height(4.dp))
+                            // r42：下拉选项还在用本地缓存时提示一句，联网刷新成功后自动消失
+                            if (vm.choicesFromCache) {
+                                Text(stringResource(R.string.choice_cache_stale), fontSize = 11.sp, color = ImmersiveInkMuted)
+                                Spacer(Modifier.height(4.dp))
+                            }
                             modelHead.forEach { spec -> SpecRow(vm, spec, {}, {}) }
                             loraExtra.forEach { entry -> LoraToggleRow(vm, entry) }
                             modelTail.forEach { spec -> SpecRow(vm, spec, {}, {}) }
@@ -175,13 +182,16 @@ fun ModelsScreen(vm: CustomModel = viewModel(), nav: NavModel = viewModel()) {
                         onClick = { confirmRestore = true },
                         modifier = Modifier.fillMaxWidth().height(44.dp).clip(restoreShape),
                         shape = restoreShape,
-                        colors = ButtonDefaults.buttonColors(
+                        // r46：经典下走 Material 默认按钮色（白玻璃底在实心卡上看不见）。
+                        colors = if (isClassic()) ButtonDefaults.buttonColors()
+                        else ButtonDefaults.buttonColors(
                             containerColor = Color.White.copy(alpha = 0.18f),
                             contentColor = ImmersiveInk,
                         ),
-                        border = BorderStroke(1.dp, ImmersiveHairline),
+                        border = if (isClassic()) null else BorderStroke(1.dp, ImmersiveHairline),
                     ) {
-                        Text(stringResource(R.string.restore_defaults), style = MaterialTheme.typography.labelLarge, color = ImmersiveInk, maxLines = 1)
+                        // r48：文字跟 Button 的 contentColor（经典=onPrimary，毛玻璃=ImmersiveInk），不显式覆写。
+                        Text(stringResource(R.string.restore_defaults), style = MaterialTheme.typography.labelLarge, maxLines = 1)
                     }
                     if (vm.message.isNotBlank()) {
                         Spacer(Modifier.height(8.dp))

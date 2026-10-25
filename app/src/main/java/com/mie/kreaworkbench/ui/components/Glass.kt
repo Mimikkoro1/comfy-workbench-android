@@ -7,6 +7,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.mie.kreaworkbench.ui.theme.isClassic
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
@@ -20,6 +21,7 @@ val LocalBlurEnabled = staticCompositionLocalOf { true }
 
 @Composable
 fun Modifier.hazeSourceIfEnabled(): Modifier {
+    if (isClassic()) return this
     val state = LocalHazeState.current
     val enabled = LocalBlurEnabled.current && Build.VERSION.SDK_INT >= 31
     if (state == null || !enabled) return this
@@ -33,6 +35,7 @@ fun Modifier.glass(
     tint: Color? = null,
     fade: HazeProgressive? = null,
 ): Modifier {
+    if (isClassic()) return background(fallback)
     val state = LocalHazeState.current
     val enabled = LocalBlurEnabled.current && Build.VERSION.SDK_INT >= 31
     if (state == null || !enabled) return background(fallback)

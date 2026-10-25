@@ -1,5 +1,3 @@
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
-
 package com.mie.kreaworkbench.ui.screens.viewer
 
 import android.app.Activity
@@ -29,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,18 +67,21 @@ fun VideoPlayer(
 ) {
     val context = LocalContext.current
     val view = LocalView.current
-    var muted by remember(path) { mutableStateOf(true) }
-    var playing by remember(path) { mutableStateOf(true) }
-    var ended by remember(path) { mutableStateOf(false) }
-    var position by remember(path) { mutableLongStateOf(0L) }
+    // r45：旋转 / 全屏重建 Activity 后接着播——四个会话状态进 rememberSaveable（以路径为键，换视频即重置）
+    var muted by rememberSaveable(path) { mutableStateOf(true) }
+    var playing by rememberSaveable(path) { mutableStateOf(true) }
+    var ended by rememberSaveable(path) { mutableStateOf(false) }
+    var position by rememberSaveable(path) { mutableLongStateOf(0L) }
     var duration by remember(path) { mutableLongStateOf(0L) }
     val scrubbing = remember(path) { booleanArrayOf(false) }
     val player = remember(path) {
+        // 起播位置用保存下来的 position（时长未报时只做负数钳制；ended 时停在保存的末帧位置）
+        val startAt = sanitizeResumePositionMs(position, 0L)
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(File(path))))
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(File(path))), startAt)
             repeatMode = Player.REPEAT_MODE_OFF
-            volume = 0f
-            playWhenReady = true
+            volume = if (muted) 0f else 1f
+            playWhenReady = playing && !ended
             prepare()
         }
     }

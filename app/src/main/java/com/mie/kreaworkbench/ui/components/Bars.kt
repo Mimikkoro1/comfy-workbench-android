@@ -20,6 +20,7 @@ import androidx.compose.ui.res.stringResource
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Lucide
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.ui.theme.pageBackground
 
 /**
@@ -38,7 +39,10 @@ fun LargeBarScaffold(
 ) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val scheme = MaterialTheme.colorScheme
-    val barColor = if (blur) Color.Transparent else pageBackground()
+    // 经典主题：一律走素皮非沉浸分支（pageBackground 底、primary 标题、onSurface 返回键），不套玻璃。
+    val immersive = immersive && !isClassic()
+    val barBlur = blur && !isClassic()
+    val barColor = if (barBlur) Color.Transparent else pageBackground()
     val fallback = if (immersive) ImmersiveGlassFallback else scheme.surfaceContainerLow.copy(alpha = 0.92f)
     val tint = if (immersive) ImmersiveGlassTint else null
     val ink = if (immersive) ImmersiveInk else scheme.primary
@@ -75,7 +79,7 @@ fun LargeBarScaffold(
                     navigationIconContentColor = if (immersive) ImmersiveInk else scheme.onSurface,
                     actionIconContentColor = ink,
                 ),
-                modifier = if (blur) Modifier.glass(fallback, tint = tint) else Modifier,
+                modifier = if (barBlur) Modifier.glass(fallback, tint = tint) else Modifier,
             )
         },
         content = content,

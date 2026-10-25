@@ -67,6 +67,8 @@ import com.mie.kreaworkbench.ui.components.immersiveGlass
 import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.locale.knownText
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import org.json.JSONObject
 
@@ -137,7 +139,7 @@ fun WorkflowImportScreen(source: Source, onBack: () -> Unit) {
 
     val readingFallback = stringResource(R.string.state_reading)
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(ImportPageBase).hazeSourceIfEnabled())
+        Box(Modifier.fillMaxSize().background(if (isClassic()) pageBackground() else ImportPageBase).hazeSourceIfEnabled())
         LargeBarScaffold(
             title = stringResource(R.string.import_config_title),
             onBack = onBack,
@@ -277,7 +279,7 @@ fun WorkflowImportScreen(source: Source, onBack: () -> Unit) {
                                             )
                                         }
                                         if (item.preview.isNotBlank()) {
-                                            val preview = if (item.preview == "连线引用") linkRef else item.preview
+                                            val preview = if (item.preview == PREVIEW_LINK_REF) linkRef else item.preview
                                             Text(
                                                 stringResource(R.string.current_value, preview),
                                                 fontSize = 11.sp,

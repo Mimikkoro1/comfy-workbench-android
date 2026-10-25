@@ -3,6 +3,7 @@ package com.mie.kreaworkbench.data.workflows
 import androidx.annotation.VisibleForTesting
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.data.api.strings
 import com.mie.kreaworkbench.ui.locale.known
 import com.mie.kreaworkbench.ui.locale.str
 import org.json.JSONArray
@@ -87,7 +88,7 @@ object Specs {
         else -> d.toString()
     }
 
-    fun defaultNumber(o: JSONObject): Double = when (val d = o.opt("default")) {
+    fun defaultNumber(o: JSONObject): Double = when (val d: Any? = o.opt("default")) {
         is Number -> d.toDouble()
         is String -> d.toDoubleOrNull() ?: 0.0
         else -> 0.0
@@ -96,7 +97,7 @@ object Specs {
     fun defaultBool(o: JSONObject): Boolean = o.optBoolean("default", false)
 
     /** image_sizes 的 default 可能是 "WxH" 字符串或 ["WxH", ...] 数组。 */
-    fun defaultSizes(o: JSONObject): List<String> = when (val d = o.opt("default")) {
+    fun defaultSizes(o: JSONObject): List<String> = when (val d: Any? = o.opt("default")) {
         is String -> if (d.isBlank()) emptyList() else listOf(d.trim())
         is JSONArray -> buildList {
             for (i in 0 until d.length()) {
@@ -521,6 +522,7 @@ private fun frameSpecByValue(
 /** 对 API 工作流的每个节点每个 input 按顺序推断，命中即停；返回按节点号+字段顺序的候选列表。 */
 fun inferSpecs(wf: JSONObject): List<Candidate> {
     val out = ArrayList<Candidate>()
+    val linkedSeeds = ArrayList<Any?>()
     val nodeIds = wf.keys().asSequence().toList().sortedBy { it.toIntOrNull() ?: Int.MAX_VALUE }
     for (nid in nodeIds) {
         val node = wf.optJSONObject(nid) ?: continue
@@ -532,11 +534,98 @@ fun inferSpecs(wf: JSONObject): List<Candidate> {
         val fieldKeys = inputs.keys().asSequence().toList()
         for (field in fieldKeys) {
             val value = inputs.opt(field) ?: continue
-            val spec = inferOne(nid, field, value, classType, nodeTitle, loraFileField) ?: continue
-            out.add(Candidate(spec, nodeTitle))
+            val spec = inferOne(nid, field, value, classType, nodeTitle, loraFileField)
+            if (spec != null) {
+                out.add(Candidate(spec, nodeTitle))
+            } else if ((field == "seed" || field == "noise_seed") && isLinkValue(value)) {
+                // r44：种子连线（规则 1 原本直接丢弃）记下来，等全部节点扫完向上追一跳
+                linkedSeeds.add(value)
+            }
         }
     }
-    return mergeImageSizes(mergeSameNameFields(out))
+    // r44：种子连线追一跳；与直连候选同 node|field 的不重复（同一来源被多条连线指到时也只留一个）
+    val seenKeys = out.mapTo(HashSet()) { Specs.key(it.spec) }
+    for (value in linkedSeeds) {
+        val cand = linkedSeedCandidate(wf, value) ?: continue
+        if (!seenKeys.add(Specs.key(cand.spec))) continue
+        out.add(cand)
+    }
+    val merged = mergeImageSizes(mergeSameNameFields(out))
+    // r44：采样器最小集默认勾选（只改 enabled，置信度/导入页排序不动）；
+    // start_at_step / end_at_step 等拼接参数保持不勾，乱改会破坏两段采样
+    for (c in merged) {
+        val spec = c.spec
+        if (baseClass(spec.optString("class_type")) in SAMPLER_CLASSES &&
+            Specs.field(spec) in SAMPLER_DEFAULT_ON_FIELDS
+        ) {
+            spec.put("enabled", true)
+        }
+    }
+    return merged
+}
+
+/** r44：KSampler / KSamplerAdvanced 导入默认勾选的最小字段集。 */
+private val SAMPLER_CLASSES = setOf("KSampler", "KSamplerAdvanced")
+private val SAMPLER_DEFAULT_ON_FIELDS = setOf("steps", "cfg", "sampler_name", "scheduler")
+
+/** 连线引用：["节点id", 输出序号]。 */
+private fun isLinkValue(value: Any?): Boolean =
+    value is JSONArray && value.length() == 2 && value.opt(0) is String && value.opt(1) is Number
+
+/**
+ * r44：种子连线向上追一跳（只对 seed / noise_seed）。来源节点是「种子类」——class 含 seed，
+ * 或有名为 seed / value / int 的字面数字字段——且该字段是字面值（不是连线）时，把来源节点的
+ * 那个字段产成 int_random 候选（沿用规则 5 的形状，node_title 用来源节点标题）。
+ * 来源本身还是连线（SimpleMath+ 之类运算节点）就到此为止，返回 null，不再追、不报错。
+ */
+private fun linkedSeedCandidate(wf: JSONObject, value: Any?): Candidate? {
+    val link = value as? JSONArray ?: return null
+    if (link.length() != 2 || link.opt(0) !is String || link.opt(1) !is Number) return null
+    val srcId = link.optString(0)
+    if (srcId.isBlank()) return null
+    val src = wf.optJSONObject(srcId) ?: return null
+    val srcInputs = src.optJSONObject("inputs") ?: return null
+    val srcClass = src.optString("class_type")
+    val srcTitle = src.optJSONObject("_meta")?.optString("title").orEmpty().ifBlank { srcClass }
+    var foundField: String = ""
+    var foundValue: Number = 0
+    for (f in listOf("seed", "value", "int")) {
+        val v = srcInputs.opt(f)
+        if (v is Number) {
+            foundField = f
+            foundValue = v
+            break
+        }
+    }
+    if (foundField.isEmpty() && baseClass(srcClass).contains("seed", ignoreCase = true)) {
+        val keys = srcInputs.keys()
+        while (keys.hasNext() && foundField.isEmpty()) {
+            val f = keys.next()
+            val v = srcInputs.opt(f)
+            if (v is Number) {
+                foundField = f
+                foundValue = v
+            }
+        }
+    }
+    if (foundField.isEmpty()) return null
+    val spec = JSONObject()
+    spec.put("node_id", srcId)
+    spec.put("field", foundField)
+    spec.put("class_type", srcClass)
+    spec.put("type", "int_random")
+    spec.put("default", foundValue.toLong())
+    spec.put("random_default", true)
+    spec.put("confidence", "high")
+    spec.put("current_value", foundValue)
+    spec.put("node_title", srcTitle)
+    spec.put("enabled", true)
+    spec.put("min", 0)
+    spec.put("max", 9223372036854775807L)
+    spec.put("step", 1)
+    spec.put("label", "种子值")
+    spec.put("help", HELP_SEED)
+    return Candidate(spec, srcTitle)
 }
 
 /**
@@ -803,32 +892,124 @@ private fun mergeImageSizes(candidates: List<Candidate>): List<Candidate> {
 }
 
 /**
- * 路 B 组合升级（inferSpecs 之后调用）：object_info 查一次，对每个 type=="text" 的候选查
- * object_info[class_type].input.required[field][0]，是字符串数组 → 改 type="select"、
+ * 路 B 组合升级（inferSpecs 之后调用）：对每个 type=="text" 的候选查
+ * object_info[class_type].input.required[field]，是字符串列表 → 改 type="select"、
  * 写私有键 kwb_combo = "<class_type>|<field>"。置信度/默认勾选不变（低、不勾）。
- * objectInfo 为 null（网络不通等）静默跳过。路 A 不做升级。
+ *
+ * r44：combo 声明兼容两种格式——老 `[[...]]`（required[field][0] 是字符串数组）与
+ * 新 `["COMBO", {"options":[...]}]`（新版 ComfyUI schema，之前只认老格式导致 Moss 工作流的
+ * aspect_ratio 升不了级、停在 type=text，参数页整行不渲染）。
+ * object_info 拉不到（离线导入 / 节点没装）时，已知的 combo 字段退回内置选项兜底
+ * （同样升级成 select + kwb_combo + choices），保证参数页这一行不整行消失；
+ * 在线时 kwb_combo 的真实枚举优先，choices 只是保底。
+ * 路 A 不做升级（不经过这个函数）。
  */
 fun upgradeCombos(candidates: List<Candidate>, objectInfo: JSONObject?): List<Candidate> {
-    if (objectInfo == null) return candidates
     return candidates.map { cand ->
         val spec = cand.spec
         if (spec.optString("type") != "text") return@map cand
         val cls = spec.optString("class_type")
         val field = Specs.field(spec)
         if (cls.isBlank() || field.isBlank()) return@map cand
-        val arr = objectInfo.optJSONObject(cls)?.optJSONObject("input")
-            ?.optJSONObject("required")?.optJSONArray(field)?.optJSONArray(0)
-            ?: return@map cand
-        var count = 0
-        for (i in 0 until arr.length()) {
-            if (arr.optString(i).isNotBlank()) count++
+        val options = objectInfo?.let { comboOptions(it, cls, field) }.orEmpty()
+        if (options.isNotEmpty()) {
+            spec.put("type", "select")
+            spec.put("kwb_combo", "$cls|$field")
+            return@map cand
         }
-        if (count == 0) return@map cand
-        spec.put("type", "select")
-        spec.put("kwb_combo", "$cls|$field")
+        val fallback = comboFallbackChoices(cls, field)
+        if (fallback.isNotEmpty()) {
+            spec.put("type", "select")
+            spec.put("kwb_combo", "$cls|$field")
+            spec.put("choices", JSONArray(fallback))
+            return@map cand
+        }
         cand
     }
 }
+
+/**
+ * object_info[class].input.required[field] 的字符串选项列表。
+ * 老格式：required[field] = [[...字符串数组...]]；新格式：["COMBO", {"options":[...]}]。
+ * 都不是（数字/开关类声明）返回空列表。
+ */
+internal fun comboOptions(objectInfo: JSONObject, cls: String, field: String): List<String> {
+    val declared = objectInfo.optJSONObject(cls)?.optJSONObject("input")
+        ?.optJSONObject("required")?.optJSONArray(field) ?: return emptyList()
+    if (declared.length() == 0) return emptyList()
+    return when (val first = declared.opt(0)) {
+        is JSONArray -> first.strings().filter { it.isNotBlank() }
+        is String ->
+            if (first == "COMBO") {
+                declared.optJSONObject(1)?.optJSONArray("options")?.strings()
+                    ?.filter { it.isNotBlank() }.orEmpty()
+            } else {
+                emptyList()
+            }
+        else -> emptyList()
+    }
+}
+
+/** ResolutionSelector.aspect_ratio 在 object_info 拿不到时的兜底选项；真实列表以服务器返回为准。 */
+private val ASPECT_RATIO_FALLBACK = listOf(
+    "1:1 (Square)",
+    "2:3 (Portrait Photo)",
+    "3:2 (Landscape Photo)",
+    "16:9 (Widescreen)",
+    "9:16 (Mobile Portrait)",
+)
+
+private fun comboFallbackChoices(cls: String, field: String): List<String> =
+    if (baseClass(cls) == "ResolutionSelector" && field == "aspect_ratio") ASPECT_RATIO_FALLBACK else emptyList()
+
+/**
+ * r49 运行时兜底：把 KSampler 系的 sampler_name / scheduler 从 text 升级成 select + kwb_combo。
+ * combo 升级只发生在导入那一刻（联网拉到 object_info 才升级）；离线导入、节点探测失败静默跳过、
+ * 或 r44 之前（只认老 COMBO 格式）导入的定义——包括内置模板的 seed 定义——这两个字段永远停在
+ * type=text，而 r44 又把它们加进了默认勾选集，于是混进生成页「编辑提示词」弹窗（prompts 过滤
+ * 只认 text/prompt_pool），「模型和采样」页（只渲染 select/int/float/bool）反而没有它们。
+ * 绑定定义时跑一遍本函数，不管定义是哪条路、哪个年代存进来的，这两个字段都以 select 形态
+ * 落到「模型和采样」页：选项在线实时拉（kwb_combo），拉不到退 r42 本地缓存，再退下面的内置列表。
+ *
+ * 类来源：buildDefinition 存盘即剥 class_type，所以 **定义里的 spec 没有 class_type**，必须从
+ * [workflow]（workflow.json）按 node_id 查节点；节点不在图里再退 spec 自带（导入中态/手写定义），
+ * 仍认不出就不升。只升 type，不动值/标签/置信度/mirror_to；已是 select（或非采样器系的同名字段）
+ * 原样返回。QwenImage21FastSampler 输入形状与 KSampler 一致（r44 默认勾选集不含它，这里只补下拉）。
+ */
+fun upgradeSamplerComboSpecs(specs: List<JSONObject>, workflow: JSONObject? = null): List<JSONObject> = specs.map { spec ->
+    val field = Specs.field(spec)
+    if (Specs.type(spec) != "text" || field !in SAMPLER_COMBO_FIELDS) return@map spec
+    val cls = workflow?.optJSONObject(Specs.nodeId(spec))?.optString("class_type").orEmpty()
+        .ifBlank { spec.optString("class_type") }
+    if (baseClass(cls) !in SAMPLER_COMBO_CLASSES) return@map spec
+    JSONObject(spec.toString())
+        .put("type", "select")
+        .put("kwb_combo", "$cls|$field")
+        .let { upgraded ->
+            val choices = upgraded.optJSONArray("choices")
+            if (choices != null && choices.length() > 0) upgraded
+            else upgraded.put("choices", JSONArray(SAMPLER_COMBO_FALLBACK[field]!!))
+        }
+}
+
+/** KSampler 系的两个下拉字段（r44 默认勾选集去掉数字类的 steps/cfg 后剩下的两个文本字段）。 */
+private val SAMPLER_COMBO_FIELDS = setOf("sampler_name", "scheduler")
+
+/** r49 下拉升级覆盖的采样器类：KSampler 系 + 同输入形状的 Qwen 快速采样器。 */
+private val SAMPLER_COMBO_CLASSES = SAMPLER_CLASSES + "QwenImage21FastSampler"
+
+/** ComfyUI 内置枚举（comfy.samplers.KSampler.SAMPLERS / SCHEDULERS，取各版本都有的稳定集），保底用。 */
+private val SAMPLER_COMBO_FALLBACK = mapOf(
+    "sampler_name" to listOf(
+        "euler", "euler_ancestral", "heun", "heunpp2", "dpm_2", "dpm_2_ancestral", "lms",
+        "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m", "dpmpp_2m_sde",
+        "dpmpp_3m_sde", "ddpm", "lcm", "ipndm", "ipndm_v", "deis", "res_multistep", "er_sde",
+    ),
+    "scheduler" to listOf(
+        "normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform",
+        "beta", "linear_quadratic", "kl_optimal",
+    ),
+)
 
 /**
  * 路 B 保存：把勾选并排好序的候选 spec 转成 PC 同格式定义。

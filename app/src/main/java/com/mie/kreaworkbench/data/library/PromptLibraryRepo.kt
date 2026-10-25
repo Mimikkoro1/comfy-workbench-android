@@ -157,7 +157,7 @@ class PromptLibraryRepo(private val ctx: Context) {
         if (pool.isEmpty()) {
             val sep = ctx.str(R.string.list_sep)
             val detail = buildList {
-                if (cat.isNotEmpty() && cat != "全部") add(ctx.str(R.string.draw_cat, cat))
+                if (cat.isNotEmpty()) add(ctx.str(R.string.draw_cat, cat))
                 if (want.isNotEmpty()) add(ctx.str(R.string.draw_include, want.joinToString(sep)))
                 if (ban.isNotEmpty()) add(ctx.str(R.string.draw_exclude, ban.joinToString(sep)))
             }.joinToString(" · ")
@@ -556,7 +556,7 @@ class PromptLibraryRepo(private val ctx: Context) {
             }
             libs.add(LibraryMeta(id, o.optString("name"), o.optInt("count"), o.optLong("importedAt"), fmt))
         }
-        val stored = when (val c = idx.opt("current")) {
+        val stored = when (val c: Any? = idx.opt("current")) {
             is String -> c.ifBlank { null }
             else -> null
         }?.takeIf { c -> libs.any { it.id == c } }
@@ -581,7 +581,7 @@ class PromptLibraryRepo(private val ctx: Context) {
     /** 抽卡过滤管线（draw 与 poolSize 共用）：分类 → 包含 → 排除。只过滤不判空，池空由调用方处理。 */
     private fun filterPool(cat: String, want: List<String>, ban: List<String>): List<PromptEntry> {
         var pool = cachedEntries
-        if (cat.isNotEmpty() && cat != "全部") {
+        if (cat.isNotEmpty()) {
             val c = cat.lowercase()
             pool = pool.filter { it.category.lowercase() == c }
         }
@@ -745,7 +745,7 @@ class PromptLibraryRepo(private val ctx: Context) {
                     continue
                 }
             }
-            val id = when (val v = o.opt("id")) {
+            val id = when (val v: Any? = o.opt("id")) {
                 is String -> v.trim()
                 is Number, is Boolean -> v.toString()
                 else -> ""
@@ -757,7 +757,7 @@ class PromptLibraryRepo(private val ctx: Context) {
             }
             val title = (o.opt("title") as? String)?.trim().orEmpty().ifBlank { shortTitle(prompt) }
             val category = (o.opt("category") as? String)?.trim().orEmpty().ifBlank { UNCAT }
-            val tags = when (val t = o.opt("tags")) {
+            val tags = when (val t: Any? = o.opt("tags")) {
                 is String -> listOf(t.trim()).filter { it.isNotEmpty() }
                 is org.json.JSONArray -> buildList {
                     for (j in 0 until t.length()) {

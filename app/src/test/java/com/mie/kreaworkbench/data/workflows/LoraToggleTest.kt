@@ -419,7 +419,8 @@ class LoraToggleTest {
     fun loraMixInferenceTable() {
         val all = inferSpecs(loraMix())
         assertEquals("候选总数", 29, all.size)
-        assertEquals("enabled 数", 10, all.count { it.spec.optBoolean("enabled") })
+        // r44：采样器 4 字段默认勾选，10→14
+        assertEquals("enabled 数", 14, all.count { it.spec.optBoolean("enabled") })
         val m = specMap(all)
         // 单 LoRA 文件字段全部是 model spec：2/3/6/9 走 LOADER_MAP，4/7 走规则 4b
         for (key in listOf("2|lora_name", "3|lora_name", "4|lora_name", "6|lora_name", "7|lora_name", "9|lora_name")) {

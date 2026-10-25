@@ -40,6 +40,9 @@ sealed interface Overlay {
     data object SettingsConnection : Overlay
     data object SettingsBackground : Overlay
     data object SettingsAppearance : Overlay
+
+    /** 设置页「反馈与建议」二级页（r43，入口在设置首页「关于」上面）。 */
+    data object SettingsFeedback : Overlay
 }
 
 class NavModel(app: Application) : AndroidViewModel(app) {
@@ -51,8 +54,9 @@ class NavModel(app: Application) : AndroidViewModel(app) {
     /** 与 [pendingI2iPath] 成对：参考图要等这个工作流绑上再填，避免 bind() 清槽。 */
     var pendingI2iWorkflowId by mutableStateOf<String?>(null)
 
-    /** r39：引导页①「自动查找」一次性标志：进连接页后自动开 ComfyUI 扫描弹窗，ConnectionPage 消费后清零。 */
-    var pendingAutoScan by mutableStateOf(false)
+    /** r39：引导页①「自动查找」一次性标志：进连接页后自动开扫描弹窗；r40 改成可指定服务类型
+     *  （引导页传 COMFY，抽卡空状态「去设置」传 GACHA），ConnectionPage 消费后置 null。 */
+    var pendingAutoScan by mutableStateOf<com.mie.kreaworkbench.data.discovery.LanHit.Kind?>(null)
 
     /** 多个带参考图工作流时的「用于图生图」选择弹窗；null = 不弹。 */
     var i2iChooser by mutableStateOf<List<ImportedWorkflowMeta>?>(null)

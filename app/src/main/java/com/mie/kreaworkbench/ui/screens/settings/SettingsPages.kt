@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -38,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +66,9 @@ import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.discovery.LanHit
 import com.mie.kreaworkbench.data.discovery.LanScanner
+import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
+import com.mie.kreaworkbench.data.net.needsLocalNetworkPermission
+import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
 import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.ui.locale.AppLocale
@@ -78,13 +83,25 @@ import com.mie.kreaworkbench.ui.components.ImmersiveHairline
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LocalGlassChrome
+import com.mie.kreaworkbench.ui.components.LocalNetworkGuard
+import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.PrimaryButton
 import com.mie.kreaworkbench.ui.components.LargeBarScaffold
+import com.mie.kreaworkbench.ui.components.notify
+import com.mie.kreaworkbench.service.ForceClearOutcome
+import com.mie.kreaworkbench.ui.components.glassCheckboxColors
 import com.mie.kreaworkbench.ui.components.glassChipColors
 import com.mie.kreaworkbench.ui.components.glassSwitchColors
 import com.mie.kreaworkbench.ui.components.glassTextFieldColors
+import com.mie.kreaworkbench.ui.components.rememberLocalNetworkGuard
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
+import com.mie.kreaworkbench.ui.theme.AppearanceRow
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
+import com.mie.kreaworkbench.ui.theme.ThemeKind
+import com.mie.kreaworkbench.ui.theme.appearanceRows
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
+import com.mie.kreaworkbench.ui.theme.resolveThemeKind
 import com.mie.kreaworkbench.util.BatteryKeep
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -107,7 +124,9 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 internal fun SettingsPageVeil(): Color =
-    if (LocalIsDark.current) Color.Black.copy(alpha = 0.48f) else Color.Black.copy(alpha = 0.52f)
+    if (isClassic()) {
+        pageBackground()
+    } else if (LocalIsDark.current) Color.Black.copy(alpha = 0.48f) else Color.Black.copy(alpha = 0.52f)
 
 /** 设置二级页共用外壳：薄纱 + 透明沉浸顶栏 + 玻璃语境（列表/分组标题走白字）。 */
 @Composable
@@ -118,7 +137,7 @@ internal fun SettingsPageScaffold(
 ) {
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().background(SettingsPageVeil()))
-        CompositionLocalProvider(LocalGlassChrome provides true) {
+        CompositionLocalProvider(LocalGlassChrome provides !isClassic()) {
             LargeBarScaffold(
                 title = title,
                 onBack = onBack,
@@ -134,7 +153,7 @@ internal fun SettingsPageScaffold(
 @Composable
 fun ConnectionPage(
     onBack: () -> Unit,
-    autoScan: Boolean = false,
+    autoScan: LanHit.Kind? = null,
     onAutoScanConsumed: () -> Unit = {},
     vm: AppSettingsModel = viewModel(),
 ) {
@@ -142,15 +161,40 @@ fun ConnectionPage(
     val app = LocalContext.current.applicationContext as KreaApp
     // r39：本机是否在 Wi-Fi/以太网上（打开页面时查一次，按钮据此置灰）
     var lanOk by remember { mutableStateOf(LanScanner.available(app)) }
+    // r41：局域网权限引导；从系统设置回来（ON_RESUME）后刷新授权状态
+    val guard = rememberLocalNetworkGuard()
+    var lanGranted by remember { mutableStateOf(isLocalNetworkGranted(app)) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) lanGranted = isLocalNetworkGranted(app)
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     // r39：离开页面自动取消扫描（AppSettingsModel 是页面级单例，必须自己收）
     DisposableEffect(Unit) {
         onDispose { vm.cancelScan() }
     }
-    // r39：引导页「自动查找」直达：首次组合时立即开 ComfyUI 扫描弹窗
+    // r41：扫描前清单弹窗；null = 关着。所有扫描入口统一走 requestScan。
+    var checklistAsk by remember { mutableStateOf<LanHit.Kind?>(null) }
+    val scope = rememberCoroutineScope()
+    fun requestScan(kind: LanHit.Kind) {
+        scope.launch {
+            // 用 suspend 读（autoScan 触发时设置可能还没载入），不读缓存值
+            if (app.container.settings.scanChecklistOff()) {
+                guard.ensure(null, runEvenIfDenied = false) { vm.startScan(kind) }
+            } else {
+                checklistAsk = kind
+            }
+        }
+    }
+    // r39：引导页「自动查找」直达：首次组合时立即开扫描弹窗；r40 起可指定服务类型（引导页 COMFY / 抽卡空状态 GACHA）
     androidx.compose.runtime.LaunchedEffect(autoScan) {
-        if (autoScan) {
+        val kind = autoScan
+        if (kind != null) {
             onAutoScanConsumed()
-            if (lanOk) vm.startScan(LanHit.Kind.COMFY)
+            if (lanOk) requestScan(kind)
         }
     }
     var textToImage by remember { mutableStateOf(false) }
@@ -167,6 +211,13 @@ fun ConnectionPage(
     val expanded = editing ?: s.serverUrl.isBlank()
     androidx.compose.runtime.LaunchedEffect(vm.authNeeded.value) {
         if (vm.authNeeded.value) editing = true
+    }
+    // r41：扫描弹窗点「手动填地址」→ ComfyUI 卡片展开编辑（消费后清空；抽卡卡片自己消费 GACHA）
+    androidx.compose.runtime.LaunchedEffect(vm.manualEdit.value) {
+        if (vm.manualEdit.value == LanHit.Kind.COMFY) {
+            editing = true
+            vm.manualEdit.value = null
+        }
     }
     SettingsPageScaffold(title = stringResource(R.string.group_connection), onBack = onBack) { padding ->
         Column(
@@ -192,7 +243,7 @@ fun ConnectionPage(
                         entries = s.serverHistory.map { (it.name.ifBlank { it.url }) to it.url },
                         emptyText = stringResource(R.string.saved_servers_empty),
                         testing = vm.busy.value,
-                        onTest = { vm.test(onSuccess = { editing = false }) },
+                        onTest = { guard.ensure(vm.url.value, runEvenIfDenied = true) { vm.test(onSuccess = { editing = false }) } },
                         onEdit = { editing = true },
                         onPick = { picked ->
                             s.serverHistory.firstOrNull { it.url == picked }?.let { vm.applyHistory(it) }
@@ -203,12 +254,20 @@ fun ConnectionPage(
                     if (vm.ping.value.isNotBlank() && vm.ping.value != serverStatus) {
                         Text(vm.ping.value, color = ImmersiveInkMuted, fontSize = 13.sp)
                     }
+                    LanBlockedRow(vm)
+                    PingDetailBlock(vm)
                 } else {
                 Text(stringResource(R.string.settings_current_server), fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 AddressMenuField(
                     value = vm.url.value,
-                    onValueChange = { vm.url.value = it },
+                    // r43：地址变了，上一次的测试结论作废（状态点回灰）；值没变不重置，避免无谓写状态
+                    onValueChange = {
+                        if (vm.url.value != it) {
+                            vm.url.value = it
+                            vm.connOk.value = null
+                        }
+                    },
                     placeholder = stringResource(R.string.server_url_hint),
                     menuDescription = stringResource(R.string.action_pick_server),
                     entries = s.serverHistory.map { (it.name.ifBlank { it.url }) to it.url },
@@ -219,10 +278,24 @@ fun ConnectionPage(
                     },
                     onDelete = { confirmDelete = it },
                     onFocusGained = { editing = true },
-                    onFocusLost = {},
+                    onFocusLost = { vm.normalizeUrlField() },
                 )
+                // r41：安卓 17 且未授权、当前地址指向局域网时提示补授权
+                if (needsLocalNetworkPermission(
+                        Build.VERSION.SDK_INT,
+                        lanGranted,
+                        urlTargetsLocalNetwork(vm.url.value),
+                    )
+                ) {
+                    Text(
+                        stringResource(R.string.lan_perm_hint),
+                        fontSize = 12.sp,
+                        color = ImmersiveInkMuted,
+                        modifier = Modifier.clickable { guard.ensure(vm.url.value, true) {} },
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
-                AutoFindRow(lanOk) { vm.startScan(LanHit.Kind.COMFY) }
+                AutoFindRow(lanOk) { requestScan(LanHit.Kind.COMFY) }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = vm.name.value,
@@ -238,7 +311,7 @@ fun ConnectionPage(
                         OutlinedTextField(
                             value = vm.user.value,
                             onValueChange = { vm.user.value = it },
-                            modifier = Modifier.weight(1f).onFocusChanged { if (!it.isFocused) vm.save() },
+                            modifier = Modifier.weight(1f),
                             label = { Text(stringResource(R.string.field_user), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             singleLine = true,
                             colors = glassTextFieldColors(),
@@ -247,7 +320,7 @@ fun ConnectionPage(
                         OutlinedTextField(
                             value = vm.pass.value,
                             onValueChange = { vm.pass.value = it },
-                            modifier = Modifier.weight(1f).onFocusChanged { if (!it.isFocused) vm.save() },
+                            modifier = Modifier.weight(1f),
                             label = { Text(stringResource(R.string.field_pass), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             singleLine = true,
                             visualTransformation = if (vm.showPass.value) VisualTransformation.None else PasswordVisualTransformation(),
@@ -274,11 +347,11 @@ fun ConnectionPage(
                 val testing = stringResource(R.string.settings_testing)
                 val testLabel = stringResource(R.string.settings_test)
                 PrimaryButton(if (vm.busy.value) testing else testLabel, enabled = !vm.busy.value) {
-                    vm.test(onSuccess = { editing = false })
+                    guard.ensure(vm.url.value, runEvenIfDenied = true) { vm.test(onSuccess = { editing = false }) }
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
-                    onClick = { vm.saveServer { editing = false } },
+                    onClick = { guard.ensure(vm.url.value, runEvenIfDenied = true) { vm.saveServer { editing = false } } },
                     enabled = vm.url.value.isNotBlank(),
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = ImmersiveInk),
@@ -290,12 +363,14 @@ fun ConnectionPage(
                     Spacer(Modifier.height(8.dp))
                     Text(vm.ping.value, color = ImmersiveInkMuted, fontSize = 13.sp)
                 }
+                LanBlockedRow(vm)
+                PingDetailBlock(vm)
                 }
             }
 
             if (showGacha) {
                 Spacer(Modifier.height(20.dp))
-                GachaServerCard(vm, s.advGachaHistory, lanOk)
+                GachaServerCard(vm, s.advGachaHistory, lanOk, guard, onScan = { requestScan(LanHit.Kind.GACHA) })
             }
 
             // r31：服务器连不上 / 地址填错时，任务可能一直挂在「生成中」。
@@ -334,6 +409,8 @@ fun ConnectionPage(
     }
 
     if (forceCancelAsk) {
+        val toaster = LocalToaster.current
+        val ctx = LocalContext.current
         GlassAlertDialog(
             onDismissRequest = { forceCancelAsk = false },
             title = { Text(stringResource(R.string.action_force_cancel_all)) },
@@ -341,8 +418,16 @@ fun ConnectionPage(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        // 全在本地收尾：DB / 界面落 cancelled、协程停掉；服务器端尽力撤销
-                        app.container.engine.forceCancelAll()
+                        // r44：本地全部收掉之外，连当前服务器的队列一起清（含电脑网页端排的任务）；
+                        // 服务器连不上也能立刻恢复本地，结果用一句话提示
+                        app.container.engine.forceCancelAll(clearServerQueue = true) { outcome ->
+                            val msg = when (outcome) {
+                                ForceClearOutcome.CLEARED -> ctx.getString(R.string.force_clear_done)
+                                ForceClearOutcome.SERVER_UNREACHABLE -> ctx.getString(R.string.force_clear_unreachable)
+                                ForceClearOutcome.SERVER_STILL_BUSY -> ctx.getString(R.string.force_clear_still_busy)
+                            }
+                            notify(toaster, ctx, msg)
+                        }
                         forceCancelAsk = false
                     },
                 ) { Text(stringResource(R.string.action_ok), color = GlassDanger) }
@@ -353,19 +438,78 @@ fun ConnectionPage(
         )
     }
 
-    // r39：局域网扫描弹窗（状态与扫描协程都在 AppSettingsModel）
+    // r39：局域网扫描弹窗（状态与扫描协程都在 AppSettingsModel）；r41：没扫到时给「手动填地址」出口
     vm.scan.value?.let { st ->
         LanScanDialog(
             state = st,
             onCancel = { vm.cancelScan() },
             onPick = { vm.pickScanHit(it) },
+            onManual = {
+                val kind = st.kind
+                vm.cancelScan()
+                vm.manualEdit.value = kind
+            },
         )
     }
+
+    // r41：扫描前清单弹窗（引导页 / 抽卡空状态都汇入 requestScan，只在这一处弹，不会弹两次）
+    checklistAsk?.let { kind ->
+        var dontAsk by remember { mutableStateOf(false) }
+        GlassAlertDialog(
+            onDismissRequest = { checklistAsk = null },
+            title = { Text(stringResource(R.string.scan_checklist_title)) },
+            text = {
+                Column {
+                    CheckLine(stringResource(R.string.scan_check_1))
+                    CheckLine(stringResource(R.string.scan_check_2))
+                    CheckLine(stringResource(R.string.scan_check_3))
+                    CheckLine(stringResource(R.string.scan_check_4))
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { dontAsk = !dontAsk },
+                    ) {
+                        Checkbox(checked = dontAsk, onCheckedChange = { dontAsk = it }, colors = glassCheckboxColors())
+                        Text(stringResource(R.string.scan_check_off), fontSize = 13.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    checklistAsk = null
+                    scope.launch {
+                        // 取消不写设置；点开始才落「不再提示」
+                        if (dontAsk) app.container.settings.setScanChecklistOff(true)
+                        guard.ensure(null, runEvenIfDenied = false) { vm.startScan(kind) }
+                    }
+                }) { Text(stringResource(R.string.scan_check_start)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { checklistAsk = null }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
+    // r41：局域网权限的说明弹窗与被拒弹窗（页面末尾放一次）
+    guard.Dialogs()
 }
 
 @Composable
-private fun GachaServerCard(vm: AppSettingsModel, history: List<String>, lanOk: Boolean) {
+private fun GachaServerCard(
+    vm: AppSettingsModel,
+    history: List<String>,
+    lanOk: Boolean,
+    guard: LocalNetworkGuard,
+    onScan: () -> Unit,
+) {
     var editing by remember { mutableStateOf<Boolean?>(null) }
+    // r41：扫描弹窗点「手动填地址」→ 抽卡卡片展开编辑（消费后清空）
+    androidx.compose.runtime.LaunchedEffect(vm.manualEdit.value) {
+        if (vm.manualEdit.value == LanHit.Kind.GACHA) {
+            editing = true
+            vm.manualEdit.value = null
+        }
+    }
     val expanded = editing ?: vm.gachaUrl.value.isBlank()
     val status = if (vm.gachaLatency.value >= 0) {
         stringResource(R.string.gacha_latency, vm.gachaLatency.value.toInt())
@@ -380,7 +524,7 @@ private fun GachaServerCard(vm: AppSettingsModel, history: List<String>, lanOk: 
                 entries = history.map { hostPort(it).ifBlank { it } to it },
                 emptyText = stringResource(R.string.gacha_history_empty),
                 testing = vm.gachaBusy.value,
-                onTest = { vm.testGacha { editing = false } },
+                onTest = { guard.ensure(vm.gachaUrl.value, runEvenIfDenied = true) { vm.testGacha { editing = false } } },
                 onEdit = { editing = true },
                 onPick = { picked ->
                     vm.pickGachaHistory(picked)
@@ -408,20 +552,70 @@ private fun GachaServerCard(vm: AppSettingsModel, history: List<String>, lanOk: 
                 },
                 onDelete = { vm.deleteGachaHistory(it) },
                 onFocusGained = { editing = true },
-                onFocusLost = {},
+                onFocusLost = { vm.normalizeGachaField() },
             )
             Spacer(Modifier.height(12.dp))
-            AutoFindRow(lanOk) { vm.startScan(LanHit.Kind.GACHA) }
+            AutoFindRow(lanOk) { onScan() }
             Spacer(Modifier.height(4.dp))
             val testing = stringResource(R.string.settings_testing)
             val testLabel = stringResource(R.string.settings_test)
             PrimaryButton(if (vm.gachaBusy.value) testing else testLabel, enabled = !vm.gachaBusy.value) {
-                vm.testGacha { editing = false }
+                guard.ensure(vm.gachaUrl.value, runEvenIfDenied = true) { vm.testGacha { editing = false } }
             }
             if (vm.gachaPing.value.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Text(vm.gachaPing.value, color = ImmersiveInkMuted, fontSize = 13.sp)
             }
+        }
+    }
+}
+
+/** r41：被系统局域网拦截（LOCAL_NET_BLOCKED）时，错误旁给「去系统设置」出口。 */
+@Composable
+private fun LanBlockedRow(vm: AppSettingsModel) {
+    if (vm.pingKind.value != com.mie.kreaworkbench.data.api.ConnErrorKind.LOCAL_NET_BLOCKED) return
+    val context = LocalContext.current
+    TextButton(
+        onClick = { com.mie.kreaworkbench.ui.components.openAppSettings(context) },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+        colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInk),
+    ) {
+        Text(stringResource(R.string.lan_perm_open_settings), maxLines = 1)
+    }
+}
+
+/** r41：测试失败 / WS 警告时给「详细信息」（可展开、可选中、可复制），给用户截图或复制给开发者。 */
+@Composable
+private fun PingDetailBlock(vm: AppSettingsModel) {
+    val detail = vm.pingDetail.value
+    if (detail.isBlank()) return
+    var open by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = { open = !open },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInkMuted),
+        ) {
+            Text(stringResource(R.string.ping_detail_show), maxLines = 1)
+        }
+        if (open) {
+            TextButton(
+                onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    runCatching { cm?.setPrimaryClip(android.content.ClipData.newPlainText("detail", detail)) }
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = ImmersiveInkMuted),
+            ) {
+                Text(stringResource(R.string.ping_detail_copy), maxLines = 1)
+            }
+        }
+    }
+    if (open) {
+        androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(detail, fontSize = 11.sp, color = ImmersiveInkMuted)
         }
     }
 }
@@ -447,7 +641,7 @@ fun BackgroundPage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
     val context = LocalContext.current
     // 忽略电池优化状态在从系统页返回后刷新
     var ignoring by remember { mutableStateOf(BatteryKeep.isIgnoring(context)) }
-    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) ignoring = BatteryKeep.isIgnoring(context)
@@ -512,10 +706,8 @@ fun AppearancePage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
     val s by vm.settings.collectAsState()
     val context = LocalContext.current
     var pendingLang by remember { mutableStateOf<String?>(null) }
-    val dynamic = Build.VERSION.SDK_INT >= 31
-    val count = if (dynamic) 5 else 4
-    val amoledIndex = if (dynamic) 3 else 2
-    val blurIndex = amoledIndex + 1
+    val kind = resolveThemeKind(s.uiStyle)
+    val rows = appearanceRows(kind, Build.VERSION.SDK_INT)
     SettingsPageScaffold(title = stringResource(R.string.group_look), onBack = onBack) { padding ->
         Column(
             Modifier
@@ -525,103 +717,127 @@ fun AppearancePage(onBack: () -> Unit, vm: AppSettingsModel = viewModel()) {
                 .padding(horizontal = 12.dp),
         ) {
             CardGroup {
-                GroupedItem(
-                    index = 0,
-                    count = count,
-                    onClick = null,
-                    headline = { Text(stringResource(R.string.settings_theme)) },
-                    supporting = {
-                        Row {
-                            listOf(
-                                "light" to stringResource(R.string.theme_light),
-                                "dark" to stringResource(R.string.theme_dark),
-                                "system" to stringResource(R.string.follow_system),
-                            ).forEach { (id, label) ->
-                                FilterChip(
-                                    selected = s.themeMode == id,
-                                    onClick = { vm.theme(id) },
-                                    label = { Text(label) },
-                                    modifier = Modifier.padding(end = 8.dp, top = 4.dp),
-                                    colors = glassChipColors(),
+                rows.forEachIndexed { index, row ->
+                    when (row) {
+                        AppearanceRow.STYLE -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = null,
+                            headline = { Text(stringResource(R.string.settings_style)) },
+                            supporting = {
+                                Row {
+                                    listOf(
+                                        ThemeKind.GLASS to stringResource(R.string.style_glass),
+                                        ThemeKind.CLASSIC to stringResource(R.string.style_classic),
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = kind == id,
+                                            onClick = { vm.uiStyle(id) },
+                                            label = { Text(label) },
+                                            modifier = Modifier.padding(end = 8.dp, top = 4.dp),
+                                            colors = glassChipColors(),
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                        AppearanceRow.THEME -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = null,
+                            headline = { Text(stringResource(R.string.settings_theme)) },
+                            supporting = {
+                                Row {
+                                    listOf(
+                                        "light" to stringResource(R.string.theme_light),
+                                        "dark" to stringResource(R.string.theme_dark),
+                                        "system" to stringResource(R.string.follow_system),
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = s.themeMode == id,
+                                            onClick = { vm.theme(id) },
+                                            label = { Text(label) },
+                                            modifier = Modifier.padding(end = 8.dp, top = 4.dp),
+                                            colors = glassChipColors(),
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                        AppearanceRow.LANGUAGE -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = null,
+                            headline = { Text(stringResource(R.string.settings_language)) },
+                            supporting = {
+                                val tags = AppLocale.languageTagOrNull(context)
+                                    ?: AppCompatDelegate.getApplicationLocales().toLanguageTags()
+                                val selected = when {
+                                    tags.startsWith("zh") -> "zh"
+                                    tags.startsWith("en") -> "en"
+                                    else -> "system"
+                                }
+                                Row {
+                                    listOf(
+                                        "system" to stringResource(R.string.follow_system),
+                                        "zh" to "中文",
+                                        "en" to "English",
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = selected == id,
+                                            onClick = { if (id != selected) pendingLang = id },
+                                            label = { Text(label) },
+                                            modifier = Modifier.padding(end = 8.dp, top = 4.dp),
+                                            colors = glassChipColors(),
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                        AppearanceRow.DYNAMIC -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = { vm.dynamicColor(!s.dynamicColor) },
+                            headline = { Text(stringResource(R.string.settings_dynamic)) },
+                            supporting = { Text(stringResource(R.string.settings_dynamic_desc)) },
+                            trailing = {
+                                Switch(
+                                    checked = s.dynamicColor,
+                                    onCheckedChange = { vm.dynamicColor(it) },
+                                    colors = glassSwitchColors(),
                                 )
-                            }
-                        }
-                    },
-                )
-                GroupedItem(
-                    index = 1,
-                    count = count,
-                    onClick = null,
-                    headline = { Text(stringResource(R.string.settings_language)) },
-                    supporting = {
-                        val tags = AppLocale.languageTagOrNull(context)
-                            ?: AppCompatDelegate.getApplicationLocales().toLanguageTags()
-                        val selected = when {
-                            tags.startsWith("zh") -> "zh"
-                            tags.startsWith("en") -> "en"
-                            else -> "system"
-                        }
-                        Row {
-                            listOf(
-                                "system" to stringResource(R.string.follow_system),
-                                "zh" to "中文",
-                                "en" to "English",
-                            ).forEach { (id, label) ->
-                                FilterChip(
-                                    selected = selected == id,
-                                    onClick = { if (id != selected) pendingLang = id },
-                                    label = { Text(label) },
-                                    modifier = Modifier.padding(end = 8.dp, top = 4.dp),
-                                    colors = glassChipColors(),
+                            },
+                        )
+                        AppearanceRow.AMOLED -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = { vm.amoled(!s.amoled) },
+                            headline = { Text(stringResource(R.string.settings_amoled)) },
+                            supporting = { Text(stringResource(R.string.settings_amoled_desc)) },
+                            trailing = {
+                                Switch(
+                                    checked = s.amoled,
+                                    onCheckedChange = { vm.amoled(it) },
+                                    colors = glassSwitchColors(),
                                 )
-                            }
-                        }
-                    },
-                )
-                if (dynamic) {
-                    GroupedItem(
-                        index = 2,
-                        count = count,
-                        onClick = { vm.dynamicColor(!s.dynamicColor) },
-                        headline = { Text(stringResource(R.string.settings_dynamic)) },
-                        supporting = { Text(stringResource(R.string.settings_dynamic_desc)) },
-                        trailing = {
-                            Switch(
-                                checked = s.dynamicColor,
-                                onCheckedChange = { vm.dynamicColor(it) },
-                                colors = glassSwitchColors(),
-                            )
-                        },
-                    )
+                            },
+                        )
+                        AppearanceRow.BLUR -> GroupedItem(
+                            index = index,
+                            count = rows.size,
+                            onClick = { vm.blur(!s.blurEnabled) },
+                            headline = { Text(stringResource(R.string.settings_blur)) },
+                            supporting = { Text(stringResource(R.string.settings_blur_desc)) },
+                            trailing = {
+                                Switch(
+                                    checked = s.blurEnabled,
+                                    onCheckedChange = { vm.blur(it) },
+                                    colors = glassSwitchColors(),
+                                )
+                            },
+                        )
+                    }
                 }
-                GroupedItem(
-                    index = amoledIndex,
-                    count = count,
-                    onClick = { vm.amoled(!s.amoled) },
-                    headline = { Text(stringResource(R.string.settings_amoled)) },
-                    supporting = { Text(stringResource(R.string.settings_amoled_desc)) },
-                    trailing = {
-                        Switch(
-                            checked = s.amoled,
-                            onCheckedChange = { vm.amoled(it) },
-                            colors = glassSwitchColors(),
-                        )
-                    },
-                )
-                GroupedItem(
-                    index = blurIndex,
-                    count = count,
-                    onClick = { vm.blur(!s.blurEnabled) },
-                    headline = { Text(stringResource(R.string.settings_blur)) },
-                    supporting = { Text(stringResource(R.string.settings_blur_desc)) },
-                    trailing = {
-                        Switch(
-                            checked = s.blurEnabled,
-                            onCheckedChange = { vm.blur(it) },
-                            colors = glassSwitchColors(),
-                        )
-                    },
-                )
             }
             Spacer(Modifier.height(24.dp + LocalExtraBottom.current))
         }
@@ -666,11 +882,19 @@ private fun AddressMenuField(
     onFocusLost: () -> Unit,
     onFocusGained: () -> Unit = {},
 ) {
+    // onFocusChanged 在节点挂上时也会发一次「未聚焦」事件——只有真获得过焦点再失去才算失焦
+    var sawFocus by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth().onFocusChanged {
-            if (it.isFocused) onFocusGained() else onFocusLost()
+            if (it.isFocused) {
+                sawFocus = true
+                onFocusGained()
+            } else if (sawFocus) {
+                sawFocus = false
+                onFocusLost()
+            }
         },
         singleLine = true,
         placeholder = { Text(placeholder, color = ImmersiveInkMuted) },
@@ -765,13 +989,16 @@ private fun AutoFindRow(lanOk: Boolean, onStart: () -> Unit) {
     }
 }
 
-/** r39：局域网扫描弹窗。进度实时更新、结果实时追加；点一行只填输入框（不自动测试、不保存）。 */
+/** r39：局域网扫描弹窗。进度实时更新、结果实时追加；点一行只填输入框（不自动测试、不保存）。
+ *  r41：扫完没结果时改为排查要点列表，右下角给「手动填地址」。 */
 @Composable
 private fun LanScanDialog(
     state: AppSettingsModel.ScanUi,
     onCancel: () -> Unit,
     onPick: (LanHit) -> Unit,
+    onManual: () -> Unit,
 ) {
+    val noHits = state.finished && state.hits.isEmpty()
     GlassAlertDialog(
         onDismissRequest = onCancel,
         title = { Text(stringResource(R.string.scan_action)) },
@@ -779,11 +1006,18 @@ private fun LanScanDialog(
             Column(Modifier.heightIn(max = 420.dp)) {
                 if (!state.finished) {
                     Text(
-                        stringResource(R.string.scan_progress, state.subnet, state.done, state.total),
+                        stringResource(R.string.scan_progress, state.selfIp, state.subnet, state.done, state.total),
                         fontSize = 13.sp,
                     )
+                    if (state.viaFallback && state.vpnActive) {
+                        Text(
+                            stringResource(R.string.scan_vpn_hint),
+                            fontSize = 12.sp,
+                            color = ImmersiveInkMuted,
+                        )
+                    }
                 } else if (state.hits.isEmpty()) {
-                    Text(stringResource(R.string.scan_empty), fontSize = 13.sp)
+                    ScanEmptyPoints(vpnActive = state.vpnActive)
                 }
                 state.hits.forEach { hit ->
                     Row(
@@ -815,9 +1049,55 @@ private fun LanScanDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
+            if (noHits) {
+                TextButton(onClick = onManual) { Text(stringResource(R.string.scan_fill_manually)) }
+            } else {
+                TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
+            }
+        },
+        dismissButton = {
+            if (noHits) {
+                TextButton(onClick = onCancel) { Text(stringResource(R.string.scan_close)) }
+            }
         },
     )
+}
+
+/** r41：没扫到时的短要点。VPN 开着时把 VPN 那条挪到最前并加粗（带「检测到 VPN 开着」）。 */
+@Composable
+private fun ScanEmptyPoints(vpnActive: Boolean) {
+    Column {
+        Text(stringResource(R.string.scan_empty_lead), fontSize = 13.sp)
+        if (vpnActive) {
+            CheckLine(stringResource(R.string.scan_check_vpn_on), bold = true)
+        }
+        CheckLine(stringResource(R.string.scan_check_1))
+        CheckLine(stringResource(R.string.scan_check_2))
+        if (!vpnActive) {
+            CheckLine(stringResource(R.string.scan_check_3))
+        }
+        CheckLine(stringResource(R.string.scan_check_4))
+        Text(stringResource(R.string.scan_empty_tail), fontSize = 13.sp)
+        Text(
+            stringResource(R.string.scan_empty_extra),
+            fontSize = 12.sp,
+            color = ImmersiveInkMuted,
+        )
+    }
+}
+
+/** r41：清单/要点的一行：圆点 + 一句话。 */
+@Composable
+private fun CheckLine(text: String, bold: Boolean = false) {
+    Row {
+        Text("•", fontSize = 13.sp)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text,
+            fontSize = 13.sp,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
 }
 
 @Composable

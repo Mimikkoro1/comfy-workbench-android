@@ -2,6 +2,7 @@ package com.mie.kreaworkbench.data.settings
 
 import android.content.Context
 import com.mie.kreaworkbench.data.gacha.DEFAULT_ADV_GACHA_URL
+import com.mie.kreaworkbench.ui.theme.ThemeKind
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -61,6 +62,8 @@ data class UserSettings(
     val dynamicColor: Boolean = false,
     val amoled: Boolean = false,
     val blurEnabled: Boolean = true,
+    /** r46 界面风格："glass"（默认）/ "classic"；未知值一律回落 glass。 */
+    val uiStyle: String = ThemeKind.GLASS.id,
     /** 当前工作流 id；"" = 未选中（合法状态，全 App 空状态）。 */
     val currentWorkflow: String = "",
     /** vivo 忽略电池优化的一次性引导只弹一次。 */
@@ -114,6 +117,8 @@ class SettingsStore(private val context: Context) {
     private val kDynamic = booleanPreferencesKey("dynamic_color")
     private val kAmoled = booleanPreferencesKey("amoled")
     private val kBlur = booleanPreferencesKey("blur")
+    // r46 界面风格（glass / classic）
+    private val kUiStyle = stringPreferencesKey("ui_style")
     private val kWorkflow = stringPreferencesKey("current_workflow")
     private val kBatteryHint = booleanPreferencesKey("battery_hint")
     private val kOnboarded = booleanPreferencesKey("onboarded")
@@ -130,6 +135,12 @@ class SettingsStore(private val context: Context) {
     // round14 更新检查：上次自动检查时间 + 用户忽略的 tag（不进 UserSettings，单独读写）
     private val kUpdateLast = longPreferencesKey("update_last_check")
     private val kUpdateIgnored = stringPreferencesKey("update_ignored_tag")
+    // r40 更新下载源：auto（默认）/ gitee / github（不进 UserSettings，单独读写）
+    private val kUpdateSource = stringPreferencesKey("update_source")
+    // r40 局域网扫描顺手记下的抽卡服务地址（不进 UserSettings，单独读写；最多 3 个，新扫描覆盖）
+    private val kScannedGacha = stringPreferencesKey("scanned_gacha_urls")
+    // r41 扫描前清单「不再提示」（不进 UserSettings，单独读写）
+    private val kScanChecklistOff = booleanPreferencesKey("scan_checklist_off")
     // v0.5.0 双配置残留键，迁移后删除
     private val kHomeUrl = stringPreferencesKey("home_url")
     private val kHomeUser = stringPreferencesKey("home_user")
@@ -171,6 +182,7 @@ class SettingsStore(private val context: Context) {
             dynamicColor = p[kDynamic] ?: false,
             amoled = p[kAmoled] ?: false,
             blurEnabled = p[kBlur] ?: true,
+            uiStyle = p[kUiStyle] ?: ThemeKind.GLASS.id,
             currentWorkflow = p[kWorkflow] ?: "",
             batteryHintShown = p[kBatteryHint] ?: false,
             onboarded = p[kOnboarded] ?: false,
@@ -193,6 +205,22 @@ class SettingsStore(private val context: Context) {
     suspend fun setUpdateLastCheck(time: Long) { context.dataStore.edit { it[kUpdateLast] = time } }
     suspend fun updateIgnoredTag(): String = context.dataStore.data.first()[kUpdateIgnored].orEmpty()
     suspend fun setUpdateIgnoredTag(tag: String) { context.dataStore.edit { it[kUpdateIgnored] = tag } }
+    suspend fun updateSource(): String = context.dataStore.data.first()[kUpdateSource] ?: UPDATE_SOURCE_AUTO
+    suspend fun setUpdateSource(source: String) { context.dataStore.edit { it[kUpdateSource] = source } }
+
+    /** r40 扫描发现的抽卡地址；按 IP 排序、最多 3 个、新扫描整体覆盖。 */
+    suspend fun scannedGachaUrls(): List<String> = parseUrlList(context.dataStore.data.first()[kScannedGacha].orEmpty())
+    suspend fun setScannedGachaUrls(urls: List<String>) {
+        val arr = JSONArray()
+        for (url in urls.take(SCANNED_GACHA_MAX)) arr.put(url)
+        context.dataStore.edit { it[kScannedGacha] = arr.toString() }
+    }
+
+    /** r41 扫描前清单「不再提示」。 */
+    suspend fun scanChecklistOff(): Boolean = context.dataStore.data.first()[kScanChecklistOff] ?: false
+    suspend fun setScanChecklistOff(v: Boolean) {
+        context.dataStore.edit { it[kScanChecklistOff] = v }
+    }
 
     /** App 安装级固定 UUID，首次生成后持久化，提交 /prompt 时作为 client_id 带上。 */
     suspend fun comfyClientId(): String = gate.withLock {
@@ -320,6 +348,7 @@ class SettingsStore(private val context: Context) {
             p[kDynamic] = next.dynamicColor
             p[kAmoled] = next.amoled
             p[kBlur] = next.blurEnabled
+            p[kUiStyle] = next.uiStyle
             p[kWorkflow] = next.currentWorkflow
             p[kBatteryHint] = next.batteryHintShown
             p[kOnboarded] = next.onboarded
@@ -356,6 +385,14 @@ class SettingsStore(private val context: Context) {
 
     companion object {
         const val HISTORY_MAX = 20
+
+        /** r40 更新下载源取值。 */
+        const val UPDATE_SOURCE_AUTO = "auto"
+        const val UPDATE_SOURCE_GITEE = "gitee"
+        const val UPDATE_SOURCE_GITHUB = "github"
+
+        /** r40 扫描记住的抽卡地址上限。 */
+        const val SCANNED_GACHA_MAX = 3
 
         fun parseHistory(raw: String): List<ServerHistoryEntry> {
             if (raw.isBlank()) return emptyList()

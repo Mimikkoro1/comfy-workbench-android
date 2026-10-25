@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -89,6 +90,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.mie.kreaworkbench.ui.motion.HeroEasing
+import com.mie.kreaworkbench.ui.theme.isClassic
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -96,11 +98,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /** 弹窗面板的着色底。真模糊画在这层上面；采不到背景时用户看到的就是这块。 */
-val GlassPanelFallback = Color.Black.copy(alpha = 0.86f)
-val GlassPanelTint = Color.Black.copy(alpha = 0.55f)
+val GlassPanelFallback: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isClassic()) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Black.copy(alpha = 0.86f)
+val GlassPanelTint: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isClassic()) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Black.copy(alpha = 0.55f)
 
 /** 深底上的危险操作。和生成页失败状态用的是同一个浅红。 */
-val GlassDanger = Color(0xFFFF8A80)
+val GlassDanger: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isClassic()) MaterialTheme.colorScheme.error else Color(0xFFFF8A80)
 
 private val LocalGlassHost = staticCompositionLocalOf<GlassHostController?> { null }
 private val LocalGlassHostRendering = staticCompositionLocalOf { false }
@@ -222,7 +230,9 @@ private fun GlassChrome(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = glassColorScheme()) {
         CompositionLocalProvider(
             LocalContentColor provides ImmersiveInk,
-            LocalGlassChrome provides true,
+            LocalGlassChrome provides !isClassic(),
+            // 弹窗是实心面不是照片：字色跟主题（毛玻璃下这个标志不起作用）
+            LocalOverPhoto provides false,
         ) {
             content()
         }
@@ -230,10 +240,10 @@ private fun GlassChrome(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Modifier.glassPanel(shape: Shape): Modifier =
+private fun Modifier.glassPanel(shape: Shape, face: Color = GlassPanelFallback): Modifier =
     clip(shape)
-        .background(GlassPanelFallback)
-        .glass(GlassPanelFallback, 24.dp, GlassPanelTint)
+        .background(face)
+        .glass(face, 24.dp, GlassPanelTint)
         .border(1.dp, ImmersiveHairline, shape)
 
 @Composable
@@ -359,6 +369,8 @@ private fun View.imeVisible(): Boolean {
 }
 
 /** 关掉弹层期间不许再把输入法弹出来。保存原来的 mode，下一帧再还回去。 */
+// 窗口软键盘模式仍需 ADJUST_RESIZE；行为保持，迁移另议。
+@Suppress("DEPRECATION")
 private fun beginGlassDismiss(
     view: View,
     savedMode: IntArray,
@@ -386,6 +398,8 @@ private fun restoreImeMode(view: View, savedMode: Int) {
 }
 
 /** 立刻拆掉弹层（去选图）时也先挡住输入法，避免关的过程里又弹出键盘。 */
+// 窗口软键盘模式仍需 ADJUST_RESIZE；行为保持，迁移另议。
+@Suppress("DEPRECATION")
 fun suppressIme(view: View, block: () -> Unit) {
     val window = view.context.findActivity()?.window
     val mode = window?.attributes?.softInputMode
@@ -537,7 +551,11 @@ fun GlassDragHandle() {
         Modifier
             .padding(vertical = 6.dp)
             .size(width = 36.dp, height = 4.dp)
-            .background(Color.White.copy(alpha = 0.45f), RoundedCornerShape(2.dp)),
+            .background(
+                if (isClassic()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                else Color.White.copy(alpha = 0.45f),
+                RoundedCornerShape(2.dp),
+            ),
     )
 }
 
@@ -587,6 +605,8 @@ private fun GlassSheetPanel(
     var sheetHeight by remember { mutableIntStateOf(0) }
     val eat = remember { MutableInteractionSource() }
     val shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    // 底部弹层的面：毛玻璃与对话框同色；经典下用 Material 底部弹层默认面（surfaceContainerLow）。
+    val face = if (isClassic()) MaterialTheme.colorScheme.surfaceContainerLow else GlassPanelFallback
     GlassChrome {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -604,7 +624,7 @@ private fun GlassSheetPanel(
                         IntOffset(0, y.roundToInt().coerceAtLeast(0))
                     }
                     .clickable(interactionSource = eat, indication = null, onClick = {})
-                    .glassPanel(shape)
+                    .glassPanel(shape, face)
                     .navigationBarsPadding(),
             ) {
                 Box(
@@ -677,7 +697,8 @@ fun GlassDropdownMenu(
         MaterialTheme(colorScheme = glassColorScheme()) {
             CompositionLocalProvider(
                 LocalContentColor provides ImmersiveInk,
-                LocalGlassChrome provides true,
+                LocalGlassChrome provides !isClassic(),
+                LocalOverPhoto provides false,
             ) {
                 menu.content()
             }
@@ -729,6 +750,7 @@ fun GlassPopup(
     }
 }
 
+@Composable
 fun Modifier.glassPopupPanel(): Modifier {
     val shape = RoundedCornerShape(24.dp)
     return clip(shape)

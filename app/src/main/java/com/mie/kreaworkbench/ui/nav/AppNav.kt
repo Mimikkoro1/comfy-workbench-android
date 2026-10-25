@@ -60,6 +60,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.mie.kreaworkbench.R
+import com.mie.kreaworkbench.KreaApp
+import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
+import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.BottomDock
@@ -67,8 +70,10 @@ import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassHostOverlay
 import com.mie.kreaworkbench.ui.components.GlassHostProvider
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
+import com.mie.kreaworkbench.ui.components.LocalNetworkGlobalPrompt
 import com.mie.kreaworkbench.ui.components.ScreenHeader
 import com.mie.kreaworkbench.ui.components.UpdateDialog
+import com.mie.kreaworkbench.ui.components.rememberLocalNetworkGuard
 import com.mie.kreaworkbench.ui.motion.HERO_MS
 import com.mie.kreaworkbench.ui.motion.HeroEasing
 import com.mie.kreaworkbench.ui.motion.LocalAnimScope
@@ -80,6 +85,8 @@ import com.mie.kreaworkbench.ui.screens.custom.CustomScreen
 import com.mie.kreaworkbench.ui.screens.custom.WorkflowEmptyState
 import com.mie.kreaworkbench.ui.screens.gen.ImmersiveBackdrop
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
 import com.mie.kreaworkbench.ui.screens.library.LibraryEditorScreen
 import com.mie.kreaworkbench.ui.screens.library.LibraryScreen
 import com.mie.kreaworkbench.ui.screens.library.Source
@@ -90,6 +97,7 @@ import com.mie.kreaworkbench.ui.screens.settings.AboutScreen
 import com.mie.kreaworkbench.ui.screens.settings.AppearancePage
 import com.mie.kreaworkbench.ui.screens.settings.BackgroundPage
 import com.mie.kreaworkbench.ui.screens.settings.ConnectionPage
+import com.mie.kreaworkbench.ui.screens.settings.FeedbackPage
 import com.mie.kreaworkbench.ui.screens.settings.SettingsHome
 import com.mie.kreaworkbench.ui.screens.viewer.ViewerScreen
 import android.net.Uri
@@ -144,6 +152,10 @@ private sealed interface Scene {
         override val depth = 1
     }
 
+    data object SettingsFeedback : Scene {
+        override val depth = 1
+    }
+
     /** r36：全新安装引导页。depth = 0（与主界面平级，从它 push 设置子页走正常滑入）。 */
     data object Onboarding : Scene {
         override val depth = 0
@@ -161,7 +173,15 @@ private fun sceneOf(stack: List<Overlay>): Scene = when (val top = stack.lastOrN
     Overlay.SettingsConnection -> Scene.SettingsConnection
     Overlay.SettingsBackground -> Scene.SettingsBackground
     Overlay.SettingsAppearance -> Scene.SettingsAppearance
+    Overlay.SettingsFeedback -> Scene.SettingsFeedback
     Overlay.Onboarding -> Scene.Onboarding
+}
+
+/** r47：该场景在经典风格下是否整页实心（生成页要看壁纸、看图页是黑底照片，都不算）。 */
+private fun solidSceneFor(scene: Scene, tab: AppTab): Boolean = when (scene) {
+    is Scene.Viewer -> false
+    is Scene.Home -> tab != AppTab.T2I
+    else -> true
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -187,6 +207,7 @@ fun AppNav(nav: NavModel) {
     val showRootBackdrop = when (scene) {
         Scene.Home, Scene.Gallery, is Scene.Viewer,
         Scene.About, Scene.SettingsConnection, Scene.SettingsBackground, Scene.SettingsAppearance,
+        Scene.SettingsFeedback,
         -> true
         else -> false
     }
@@ -201,6 +222,25 @@ fun AppNav(nav: NavModel) {
     val transition = rememberTransition(transitionState, label = "overlay")
     var gesture by remember { mutableStateOf(false) }
     val cancelJob = remember { arrayOfNulls<Job>(1) }
+
+    // r41：安卓 17 局域网权限——已保存服务器指向局域网且未授权时，每次进程启动最多引导一次。
+    // runEvenIfDenied = true、action 为空：只负责说明，不拦截任何已有流程。
+    val lanGuard = rememberLocalNetworkGuard()
+    val navApp = androidx.compose.ui.platform.LocalContext.current.applicationContext as KreaApp
+    val bootSettings by navApp.container.settings.flow.collectAsState(initial = UserSettings())
+    LaunchedEffect(bootSettings.serverUrl, bootSettings.advGachaUrl, bootSettings.advGacha) {
+        if (LocalNetworkGlobalPrompt.shown) return@LaunchedEffect
+        val s = bootSettings
+        val target = when {
+            s.advGacha && s.advGachaUrl.isNotBlank() -> s.advGachaUrl
+            else -> s.serverUrl
+        }
+        // 只在确实指向局域网时才消耗「一次」的额度；公网地址不弹也不占额度
+        if (target.isNotBlank() && urlTargetsLocalNetwork(target)) {
+            LocalNetworkGlobalPrompt.shown = true
+            lanGuard.ensure(target, runEvenIfDenied = true) {}
+        }
+    }
 
     LaunchedEffect(scene) {
         if (transitionState.currentState != scene || transitionState.targetState != scene) {
@@ -277,6 +317,16 @@ fun AppNav(nav: NavModel) {
                 cacheKey = "root",
                 awaitingMedia = rootAwaitingMedia,
             )
+        }
+        // r47：经典风格下，进/出二级页的过渡动画带淡入淡出，实心底跟着半透明，
+        // 会把生成页壁纸透出来。两端都是「整页实心」的场景（设置/库/模型等一级页与各二级页，
+        // 非生成页、非看图页）时，在壁纸上、场景内容下垫一层不透明页底。
+        // 毛玻璃透壁纸是正常效果，不动；任一端是生成页（T2I tab）或看图页时也不垫。
+        if (isClassic() &&
+            solidSceneFor(transition.targetState, nav.tab) &&
+            solidSceneFor(transition.currentState, nav.tab)
+        ) {
+            Box(Modifier.fillMaxSize().background(pageBackground()))
         }
         transition.AnimatedContent(
             modifier = Modifier.fillMaxSize(),
@@ -407,6 +457,9 @@ fun AppNav(nav: NavModel) {
     // r29：新版本对话框改成玻璃弹层，必须挂在 GlassHostProvider 里才画得出来
     // （以前在 MainActivity 用系统 AlertDialog，现在跟着玻璃宿主走）。
     UpdateDialog()
+
+    // r41：局域网权限的说明弹窗与被拒弹窗（全局检查用；ConnectionPage 另有自己的实例）
+    lanGuard.Dialogs()
     }
 }
 @Composable
@@ -445,10 +498,11 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
         Scene.SettingsConnection -> ConnectionPage(
             onBack = { nav.pop() },
             autoScan = nav.pendingAutoScan,
-            onAutoScanConsumed = { nav.pendingAutoScan = false },
+            onAutoScanConsumed = { nav.pendingAutoScan = null },
         )
         Scene.SettingsBackground -> BackgroundPage(onBack = { nav.pop() })
         Scene.SettingsAppearance -> AppearancePage(onBack = { nav.pop() })
+        Scene.SettingsFeedback -> FeedbackPage(onBack = { nav.pop() })
         Scene.Onboarding -> {
             // r36.1：步骤完成判定从 settings 读，①=地址已配、②=工作流已选
             val serverReady by nav.serverReady.collectAsState()
@@ -458,7 +512,7 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
                 s2Done = wf.isNotBlank(),
                 onConnect = { nav.push(Overlay.SettingsConnection) },
                 onAutoScan = {
-                    nav.pendingAutoScan = true
+                    nav.pendingAutoScan = com.mie.kreaworkbench.data.discovery.LanHit.Kind.COMFY
                     nav.push(Overlay.SettingsConnection)
                 },
                 onWorkflows = { nav.openWfChooser() },
@@ -480,9 +534,14 @@ private fun HomeLayer(nav: NavModel, holder: SaveableStateHolder) {
             // r28：工作流/库、模型两页改成玻璃卡，遮罩要薄一点，否则背景被糊死、玻璃看不出来。
             // r29：设置页也玻璃化了，跟着走同一套薄纱；生成空态仍用厚遮罩。
             if (!immersive) {
-                ReadabilityScrim(
-                    thin = nav.tab == AppTab.WORKFLOWS || nav.tab == AppTab.MODELS || nav.tab == AppTab.SETTINGS,
-                )
+                if (isClassic()) {
+                    // 经典主题：不铺薄纱，直接实心页底（保留吃点击，防止点穿到背景图）。
+                    ClassicPageVeil()
+                } else {
+                    ReadabilityScrim(
+                        thin = nav.tab == AppTab.WORKFLOWS || nav.tab == AppTab.MODELS || nav.tab == AppTab.SETTINGS,
+                    )
+                }
             }
             TabPager(nav, holder)
             BottomDock(nav.tab, { nav.tab = it }, Modifier.align(Alignment.BottomCenter))
@@ -512,13 +571,32 @@ private fun ReadabilityScrim(thin: Boolean = false) {
     )
 }
 
+/** 经典主题里顶替 ReadabilityScrim 的实心页底，同样吃掉空白处的点击。 */
+@Composable
+private fun ClassicPageVeil() {
+    val eat = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(pageBackground())
+            .clickable(interactionSource = eat, indication = null, onClick = {}),
+    )
+}
+
 @Composable
 private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
+    // transitionSpec 不是 composable，先在外层取好。
+    val classic = isClassic()
     AnimatedContent(
         targetState = nav.tab,
         transitionSpec = {
-            (fadeIn(tween(210, delayMillis = 90)) + scaleIn(tween(210, delayMillis = 90), initialScale = 0.96f))
-                .togetherWith(fadeOut(tween(90)))
+            // 经典主题：低端机档，tab 切换只留淡入淡出；毛玻璃保留原来的轻缩放。
+            if (classic) {
+                fadeIn(tween(210, delayMillis = 90)).togetherWith(fadeOut(tween(90)))
+            } else {
+                (fadeIn(tween(210, delayMillis = 90)) + scaleIn(tween(210, delayMillis = 90), initialScale = 0.96f))
+                    .togetherWith(fadeOut(tween(90)))
+            }
         },
         label = "tabs",
     ) { tab ->
@@ -547,6 +625,11 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
                                 nav.pendingI2iWorkflowId = null
                             },
                             onGallery = { nav.push(Overlay.Gallery) },
+                            onOpenGachaSettings = {
+                                // r40：抽卡空状态「去设置」→ 连接设置页并自动开抽卡扫描弹窗
+                                nav.pendingAutoScan = com.mie.kreaworkbench.data.discovery.LanHit.Kind.GACHA
+                                nav.push(Overlay.SettingsConnection)
+                            },
                         )
                     }
                 }
@@ -570,7 +653,8 @@ private fun GenEmptyTab(
     onPickWorkflow: (String) -> Unit,
     onImport: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f))) {
+    // r46：经典主题换实心页底，空态文案/按钮走主题分支（immersive=false 那套素皮原样）。
+    Box(Modifier.fillMaxSize().background(if (isClassic()) pageBackground() else Color.Black.copy(alpha = 0.72f))) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader(stringResource(R.string.tab_generate), ink = ImmersiveInk)
             Column(
@@ -584,7 +668,7 @@ private fun GenEmptyTab(
                     onConfigureServer = onConfigureServer,
                     onPickWorkflow = onPickWorkflow,
                     onGoImport = onImport,
-                    immersive = true,
+                    immersive = !isClassic(),
                 )
                 Spacer(Modifier.weight(1.2f))
             }

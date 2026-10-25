@@ -26,6 +26,14 @@ data class LiveJob(
     val downloadFailed: Boolean = false,
     val stage: String = "",
     val error: String = "",
+    /** r42：ComfyUI execution_error 详细报错（多行文本）。只在当次进程内存里有效，重启后为 null。 */
+    val errorDetail: String? = null,
+    /** r44：提交瞬间 400 的 ComfyUI 原始报错（error.message + details）。只内存，重启后为 null。 */
+    val rawError: String? = null,
+    /** r44：进入当前 phase 的时间戳（内存；put 时 phase 没变沿用旧值，变了重置）。0 = 未知。 */
+    val phaseSince: Long = 0L,
+    /** r44：引擎看门狗置位的「长时间无进展」时间戳（内存）；0 = 没卡。只提示，不自动取消。 */
+    val stalledSince: Long = 0L,
     val paths: List<String> = emptyList(),
     val prompt: String = "",
     val createdAt: Long = 0L,
@@ -100,7 +108,7 @@ fun LiveJob.line(context: Context): String = when (phase) {
     }
     "downloading" ->
         if (downloadFailed) {
-            context.str(R.string.phase_video_retry)
+            context.str(R.string.phase_download_retry)
         } else {
             context.str(R.string.phase_downloading, downloadDetail())
         }

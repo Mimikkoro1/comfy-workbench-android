@@ -70,6 +70,7 @@ import com.mie.kreaworkbench.ui.components.GlassCard
 import com.mie.kreaworkbench.ui.components.GlassDanger
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.ScreenHeader
 import com.mie.kreaworkbench.ui.components.glassTextFieldColors
@@ -268,10 +269,10 @@ fun LibraryScreen(vm: LibraryModel = viewModel(), nav: NavModel = viewModel()) {
                                     Box(
                                         Modifier
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.White.copy(alpha = 0.22f))
+                                            .background(if (isClassic()) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.22f))
                                             .padding(horizontal = 6.dp, vertical = 2.dp),
                                     ) {
-                                        Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
+                                        Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = if (isClassic()) MaterialTheme.colorScheme.onPrimaryContainer else ImmersiveInk, fontWeight = FontWeight.Bold)
                                     }
                                     Spacer(Modifier.size(6.dp))
                                 }
@@ -719,10 +720,10 @@ private fun WorkflowRow(
             Box(
                 Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.White.copy(alpha = 0.22f))
+                    .background(if (isClassic()) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.22f))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
-                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = ImmersiveInk, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.badge_current), fontSize = 10.sp, color = if (isClassic()) MaterialTheme.colorScheme.onPrimaryContainer else ImmersiveInk, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.size(6.dp))
         }

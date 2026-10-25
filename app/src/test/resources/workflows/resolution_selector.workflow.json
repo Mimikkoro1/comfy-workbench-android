@@ -1,0 +1,4 @@
+{
+  "850": {"class_type": "ResolutionSelector", "_meta": {"title": "分辨率选择器"}, "inputs": {"aspect_ratio": "2:3 (Portrait Photo)", "megapixels": 1.5, "multiple": 32}},
+  "698": {"class_type": "EmptyLatentImage", "_meta": {"title": "Empty Latent Image (Base Dimensions) 初始大小"}, "inputs": {"width": ["850", 0], "height": ["850", 1], "batch_size": 1}}
+}

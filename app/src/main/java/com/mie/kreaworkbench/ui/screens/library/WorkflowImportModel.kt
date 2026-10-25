@@ -31,6 +31,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** 「连线引用」的内部哨兵（不是显示文字）；显示仍走 R.string.link_ref。 */
+internal const val PREVIEW_LINK_REF = "\u0000link_ref"
+
 /** 配置页里一个候选字段。spec 保留 runtime 字段，label/tier/勾选在 item 上。 */
 data class WfItem(
     val spec: JSONObject,
@@ -47,7 +50,7 @@ data class WfItem(
         get() = when (type) {
             "image_sizes" -> spec.optString("default")
             else -> when (val v = spec.opt("current_value")) {
-                is JSONArray -> "连线引用"
+                is JSONArray -> PREVIEW_LINK_REF
                 null -> ""
                 else -> v.toString()
             }

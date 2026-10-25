@@ -44,6 +44,8 @@ import com.composables.icons.lucide.Lucide
 import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.discovery.LanScanner
 import com.mie.kreaworkbench.ui.components.ImmersiveHairline
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.ScreenHeader
@@ -74,7 +76,8 @@ fun OnboardingScreen(
     // r39：非 Wi-Fi/以太网时第①步「自动查找」置灰（打开页面时查一次）
     val context = LocalContext.current
     val lanOk = remember { LanScanner.available(context) }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f))) {
+    // r46：经典主题换实心页底，白字体系随之跟主题。
+    Box(Modifier.fillMaxSize().background(if (isClassic()) pageBackground() else Color.Black.copy(alpha = 0.72f))) {
         Column(
             Modifier
                 .fillMaxSize()

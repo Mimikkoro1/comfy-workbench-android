@@ -103,6 +103,10 @@ fun CompactMenuField(
     value: String,
     options: List<String>,
     modifier: Modifier = Modifier,
+    // r43：只给字段当前显示的值文字上色（模型缺失整段标红用）；默认 null = 原行为。
+    // 只影响收起态的值文字，展开菜单里的各项颜色不动。
+    // 注意：不能放到参数表末尾——现有调用点全是尾随 lambda 写法，尾随 lambda 永远绑最后一个参数。
+    valueColor: Color? = null,
     onPick: (Int) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -127,7 +131,7 @@ fun CompactMenuField(
         Text(
             value,
             style = MaterialTheme.typography.labelMedium,
-            color = if (glassy) ImmersiveInk else scheme.onSurface,
+            color = valueColor ?: if (glassy) ImmersiveInk else scheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),

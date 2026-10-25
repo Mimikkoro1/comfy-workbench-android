@@ -65,7 +65,8 @@ class FixtureInferenceTest {
     fun kr2turboT2iEnabledTable() {
         val all = infer("kr2turbo_t2i.workflow.json")
         assertEquals("候选总数", 17, all.size)
-        assertEquals("enabled 数", 6, enabledCount(all))
+        // r44：KSampler 最小集（steps/cfg/sampler_name/scheduler）默认勾选，6→10
+        assertEquals("enabled 数", 10, enabledCount(all))
         val m = specMap(all)
         // width/height 已合并进 sizes，不再单独出现
         assertFalse("9|width", m.containsKey("9|width"))
@@ -85,11 +86,7 @@ class FixtureInferenceTest {
                 "5|type" to "text",
                 "5|device" to "text",
                 "9|batch_size" to "int",
-                "12|scheduler" to "text",
                 "12|denoise" to "int",
-                "12|cfg" to "int",
-                "12|sampler_name" to "text",
-                "12|steps" to "int",
                 "16|filename_prefix" to "text",
             ),
             lowKeyTypes(all),
@@ -102,7 +99,6 @@ class FixtureInferenceTest {
     fun kr2turboI2iEnabledTable() {
         val all = infer("kr2turbo_i2i.workflow.json")
         assertEquals("候选总数", 16, all.size)
-        assertEquals("enabled 数", 6, enabledCount(all))
         val m = specMap(all)
         assertModel(m.getValue("2|unet_name").spec, "UNETLoader", "扩散模型", "Krea2\\Krea2Turbo_FP8.safetensors")
         assertModel(m.getValue("5|clip_name").spec, "CLIPLoader", "文本编码器", "Krea2\\qwen3-vl-4b-heretic-bf16.safetensors")
@@ -117,6 +113,8 @@ class FixtureInferenceTest {
         assertEquals("default", "example.png", image.optString("default"))
         assertEquals("help", "上传本次生成使用的参考图片。", image.optString("help"))
         assertSeed(m.getValue("13|seed").spec, 297982133758750L)
+        // r44：采样器 4 字段默认勾选，6→10
+        assertEquals("enabled 数", 10, enabledCount(all))
         // i2i 没有 latent 节点 → 没有 image_sizes
         assertFalse("无 image_sizes", all.any { it.spec.optString("type") == "image_sizes" })
         assertEquals(
@@ -126,10 +124,6 @@ class FixtureInferenceTest {
                 "4|shift" to "int",
                 "5|type" to "text",
                 "5|device" to "text",
-                "13|steps" to "int",
-                "13|cfg" to "int",
-                "13|sampler_name" to "text",
-                "13|scheduler" to "text",
                 "13|denoise" to "float",
                 "16|filename_prefix" to "text",
             ),
@@ -158,7 +152,8 @@ class FixtureInferenceTest {
     fun wan22EnabledTable() {
         val all = infer("wan22_i2v_4step.workflow.json")
         assertEquals("候选总数", 48, all.size)
-        assertEquals("enabled 数", 13, enabledCount(all))
+        // r44：57 采样器 4 字段默认勾选（cfg/steps/sampler_name/scheduler 已合并），13→17
+        assertEquals("enabled 数", 17, enabledCount(all))
         val m = specMap(all)
 
         val prompt = m.getValue("6|text").spec
@@ -223,10 +218,6 @@ class FixtureInferenceTest {
                 "38|device" to "text",
                 "54|shift" to "int",
                 "57|add_noise" to "text",
-                "57|steps" to "int",
-                "57|cfg" to "int",
-                "57|sampler_name" to "text",
-                "57|scheduler" to "text",
                 "57|start_at_step" to "int",
                 "57|end_at_step" to "int",
                 "57|return_with_leftover_noise" to "text",
@@ -350,7 +341,8 @@ class FixtureInferenceTest {
     fun qwen21T2iEnabledTable() {
         val all = infer("qwen21_t2i.workflow.json")
         assertEquals("候选总数", 20, all.size)
-        assertEquals("enabled 数", 7, enabledCount(all))
+        // r44：7 采样器 4 字段默认勾选，7→11
+        assertEquals("enabled 数", 11, enabledCount(all))
         val m = specMap(all)
         assertModel(m.getValue("1|unet_name").spec, "UNETLoader", "扩散模型", "qwen_image_2.1_int8_convrot.safetensors")
         assertModel(m.getValue("2|clip_name").spec, "CLIPLoader", "文本编码器", "qwen3vl_8b_int8_convrot.safetensors")
@@ -382,11 +374,7 @@ class FixtureInferenceTest {
                 "4|device" to "text",
                 "5|resolution" to "int",
                 "6|batch_size" to "int",
-                "7|scheduler" to "text",
                 "7|denoise" to "int",
-                "7|cfg" to "int",
-                "7|sampler_name" to "text",
-                "7|steps" to "int",
                 "9|filename_prefix" to "text",
             ),
             lowKeyTypes(all),
@@ -399,7 +387,8 @@ class FixtureInferenceTest {
     fun qwen21EditEnabledTable() {
         val all = infer("qwen21_edit.workflow.json")
         assertEquals("候选总数", 22, all.size)
-        assertEquals("enabled 数", 7, enabledCount(all))
+        // r44：8 采样器 4 字段默认勾选，7→11
+        assertEquals("enabled 数", 11, enabledCount(all))
         val m = specMap(all)
         assertModel(m.getValue("1|unet_name").spec, "UNETLoader", "扩散模型", "qwen_image_2.1_bf16.safetensors")
         assertModel(m.getValue("2|clip_name").spec, "CLIPLoader", "文本编码器", "qwen3vl_8b_int8_convrot.safetensors")
@@ -427,11 +416,7 @@ class FixtureInferenceTest {
                 "6|resolution_steps" to "int",
                 "7|prompt" to "text",
                 "7|resolution" to "int",
-                "8|scheduler" to "text",
                 "8|denoise" to "int",
-                "8|cfg" to "int",
-                "8|sampler_name" to "text",
-                "8|steps" to "int",
                 "10|filename_prefix" to "text",
             ),
             lowKeyTypes(all),
@@ -457,7 +442,8 @@ class FixtureInferenceTest {
     fun krea2T2iEnabledTable() {
         val all = infer("krea2_t2i.workflow.json")
         assertEquals("候选总数", 16, all.size)
-        assertEquals("enabled 数", 6, enabledCount(all))
+        // r44：3 采样器 4 字段默认勾选，6→10
+        assertEquals("enabled 数", 10, enabledCount(all))
         val m = specMap(all)
         assertSeed(m.getValue("3|seed").spec, 0L)
         assertSizes(m.getValue("5|sizes").spec, "832x1216")
@@ -472,10 +458,6 @@ class FixtureInferenceTest {
                 "11|type" to "text",
                 "11|device" to "text",
                 "5|batch_size" to "int",
-                "3|steps" to "int",
-                "3|cfg" to "int",
-                "3|sampler_name" to "text",
-                "3|scheduler" to "text",
                 "3|denoise" to "int",
                 "29|filename_prefix" to "text",
             ),

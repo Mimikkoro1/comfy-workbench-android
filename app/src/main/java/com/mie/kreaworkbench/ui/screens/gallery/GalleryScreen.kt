@@ -48,10 +48,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -82,8 +84,11 @@ import com.mie.kreaworkbench.ui.components.GlassDanger
 import com.mie.kreaworkbench.ui.components.ImmersiveGlassFallback
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
+import com.mie.kreaworkbench.ui.components.LocalOverPhoto
 import com.mie.kreaworkbench.ui.components.ImmersiveShadow
 import com.mie.kreaworkbench.ui.components.LargeBarScaffold
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
 import com.mie.kreaworkbench.ui.components.LocalToaster
 import com.mie.kreaworkbench.ui.components.glassChipColors
 import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
@@ -239,7 +244,8 @@ private const val TAG = "kwb-gallery"
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: GalleryModel = viewModel()) {
-    var selected by remember { mutableStateOf(setOf<Long>()) }
+    // r45：多选集合进 rememberSaveable——旋转重建后选中不丢
+    var selected by rememberSaveable(stateSaver = listSaver<Set<Long>, Long>(save = { it.toList() }, restore = { it.toSet() })) { mutableStateOf(setOf<Long>()) }
     var confirm by remember { mutableStateOf(false) }
     var cache by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
@@ -269,7 +275,8 @@ fun GalleryScreen(onBack: () -> Unit, onOpen: (List<Long>, Int) -> Unit, vm: Gal
     Box(Modifier.fillMaxSize()) {
         // r27.2：共享背景已提到 AppNav 根，图库不再自己挂一份（那样每次进入都会先空一下再解码）。
         // 这里只留深色遮罩：把根背景压暗，白字和玻璃顶栏才站得住；没图时底下就是根背景的兜底渐变。
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)))
+        // r46：经典主题换实心页底（白字体系随之跟主题）。
+        Box(Modifier.fillMaxSize().background(if (isClassic()) pageBackground() else Color.Black.copy(alpha = 0.62f)))
         LargeBarScaffold(
             title = if (selecting) stringResource(R.string.gallery_selected, selected.size) else stringResource(R.string.title_gallery),
             onBack = { if (selecting) selected = emptySet() else onBack() },
@@ -431,6 +438,8 @@ private fun Cell(
     onFavorite: () -> Unit,
 ) {
     val press = remember { MutableInteractionSource() }
+    // 格子里的爱心/勾选直接压在缩略图上：经典主题里也保持白（压图白字），不跟主题。
+    CompositionLocalProvider(LocalOverPhoto provides true) {
     Box(
         modifier
             .pressScale(press)
@@ -488,6 +497,7 @@ private fun Cell(
                 modifier = Modifier.align(Alignment.TopEnd),
             )
         }
+    }
     }
 }
 

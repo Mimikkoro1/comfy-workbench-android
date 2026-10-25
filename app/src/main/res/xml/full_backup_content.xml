@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 排除含服务器凭据的 DataStore，其余照常备份 -->
+<full-backup-content>
+    <exclude domain="file" path="datastore/krea_settings.preferences_pb" />
+    <exclude domain="file" path="datastore/krea_settings.preferences_pb.tmp" />
+</full-backup-content>

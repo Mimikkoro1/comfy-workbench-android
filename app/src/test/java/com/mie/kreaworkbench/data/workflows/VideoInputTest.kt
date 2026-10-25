@@ -89,7 +89,8 @@ class VideoInputTest {
         val all = infer("animate_transfer.workflow.json")
         // 实跑值（27 候选 / 9 勾选）：节点 2 的 8 个字段全部与节点 1 同值合并
         assertEquals("候选总数", 27, all.size)
-        assertEquals("enabled 数", 9, enabledCount(all))
+        // r44：采样器 4 字段默认勾选，9→13
+        assertEquals("enabled 数", 13, enabledCount(all))
         val m = specMap(all)
         val video = m.getValue("1|video").spec
         assertEquals("1|video type", "file:video", video.optString("type"))

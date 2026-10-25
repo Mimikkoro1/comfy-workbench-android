@@ -2,6 +2,7 @@ package com.mie.kreaworkbench.data.discovery
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import com.mie.kreaworkbench.data.api.trimBase
 import kotlinx.coroutines.Job
@@ -13,6 +14,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.ConnectionPool
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -58,10 +60,34 @@ class LanScanner {
 
     /**
      * 扫描 [selfIp]/[prefix] 网段。端口列表由调用方按服务给（默认端口 + 当前配置里的自定义端口）。
+     * [network]（r42）非空且可用时，探测连接绑定到这张网卡（开 VPN 时不走虚拟网卡）；
+     * 预检不通过（网络已失效等）回退到未绑定的 [probe]，行为与 r41 一致。
      * 实时输出 [ScanEvent]；取消收集即取消扫描（探测请求一并取消）。
      * 结果按发现顺序即为 IP 升序（主机列表升序枚举），去重由收集方按 url 做。
      */
-    fun scan(selfIp: Int, prefix: Int, comfyPorts: List<Int>, gachaPorts: List<Int>): Flow<ScanEvent> = channelFlow {
+    fun scan(
+        context: Context,
+        selfIp: Int,
+        prefix: Int,
+        comfyPorts: List<Int>,
+        gachaPorts: List<Int>,
+        network: Network? = null,
+    ): Flow<ScanEvent> = channelFlow {
+        // 预检：getNetworkCapabilities 判活 + createSocket 试绑（网络失效时抛 IOException）。
+        // 不做预检的话，绑定到失效网络的 socketFactory 会让每次连接都抛 SocketException，
+        // 被 probeText 吞成「无响应」→ 扫描静默变成空结果。
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val bound = usableOrNull(network) { n ->
+            cm?.getNetworkCapabilities(n) != null && n.socketFactory.createSocket().use { true }
+        }?.let { n ->
+            runCatching {
+                probe.newBuilder()
+                    .socketFactory(n.socketFactory)
+                    .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+                    .build()
+            }.getOrNull()
+        }
+        val client = bound ?: probe
         val hosts = hostsToScan(selfIp, prefix, selfIp)
         val comfy = comfyPorts.distinct()
         val gacha = gachaPorts.distinct()
@@ -76,14 +102,14 @@ class LanScanner {
         for (host in hosts) {
             for (port in comfy) {
                 jobs += launch {
-                    val hit = gate.withPermit { probeComfy(host, port) }
+                    val hit = gate.withPermit { probeComfy(client, host, port) }
                     hit?.let { send(ScanEvent.Found(it)) }
                     send(ScanEvent.Progress(done.incrementAndGet(), total))
                 }
             }
             for (port in gacha) {
                 jobs += launch {
-                    val hit = gate.withPermit { probeGacha(host, port) }
+                    val hit = gate.withPermit { probeGacha(client, host, port) }
                     hit?.let { send(ScanEvent.Found(it)) }
                     send(ScanEvent.Progress(done.incrementAndGet(), total))
                 }
@@ -93,24 +119,24 @@ class LanScanner {
         send(ScanEvent.Finished)
     }
 
-    private suspend fun probeComfy(host: String, port: Int): LanHit? {
-        val (code, text) = probeText("http://$host:$port/system_stats") ?: return null
+    private suspend fun probeComfy(client: OkHttpClient, host: String, port: Int): LanHit? {
+        val (code, text) = probeText(client, "http://$host:$port/system_stats") ?: return null
         if (code != 200) return null
         val hit = parseComfyStats(text) ?: return null
         val detail = listOf(hit.gpu, hit.version).filter { it.isNotBlank() }.joinToString(" · ")
         return LanHit(LanHit.Kind.COMFY, "http://$host:$port", detail)
     }
 
-    private suspend fun probeGacha(host: String, port: Int): LanHit? {
-        val (code, text) = probeText("http://$host:$port/api/health") ?: return null
+    private suspend fun probeGacha(client: OkHttpClient, host: String, port: Int): LanHit? {
+        val (code, text) = probeText(client, "http://$host:$port/api/health") ?: return null
         if (code != 200) return null
         val hit = parseGachaHealth(text) ?: return null
         return LanHit(LanHit.Kind.GACHA, "http://$host:$port", hit.version)
     }
 
     /** 探测一个 GET；任何失败（超时/拒连/格式错/取消）都返回 null，不抛。 */
-    private suspend fun probeText(url: String): Pair<Int, String>? = try {
-        probe.newCall(Request.Builder().url(url).build()).await()
+    private suspend fun probeText(client: OkHttpClient, url: String): Pair<Int, String>? = try {
+        client.newCall(Request.Builder().url(url).build()).await()
     } catch (_: Exception) {
         null
     }
@@ -140,29 +166,61 @@ class LanScanner {
         private const val PROBE_CONCURRENCY = 48
 
         /**
-         * 本机网段：活跃网络必须是 Wi-Fi 或以太网，取第一个非 loopback/link-local 的 IPv4 与前缀。
-         * 不满足返回 null（按钮置灰、扫描拒绝启动）。
+         * 本机网段（r41）：遍历所有网络组装候选交给 [pickLanSegment]。
+         * 开 VPN 时 active 多半是 tun——旧行为会拿到虚拟网段或直接 null（按钮置灰）；
+         * 现在优先挑不带 VPN 的 Wi-Fi/以太网。null = 找不到可扫的网段。
          */
-        fun lanSegment(context: Context): Pair<Int, Int>? {
+        @Suppress("DEPRECATION")
+        fun lanSegmentInfo(context: Context): LanSegment? {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                 ?: return null
-            val network = cm.activeNetwork ?: return null
-            val caps = cm.getNetworkCapabilities(network) ?: return null
-            val onLan = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-            if (!onLan) return null
-            val lp = cm.getLinkProperties(network) ?: return null
-            for (la in lp.linkAddresses) {
-                val addr = la.address
-                if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress) {
-                    return Pair(ipv4BytesToInt(addr.address), la.prefixLength)
+            val cands = ArrayList<LanNetCandidate>()
+            for (network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+                val lp = cm.getLinkProperties(network) ?: continue
+                var ipv4: Int? = null
+                var prefix = 0
+                for (la in lp.linkAddresses) {
+                    val addr = la.address
+                    if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress) {
+                        ipv4 = ipv4BytesToInt(addr.address)
+                        prefix = la.prefixLength
+                        break
+                    }
                 }
+                cands.add(
+                    LanNetCandidate(
+                        wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                        ethernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                        vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                        ipv4 = ipv4,
+                        prefix = prefix,
+                        active = network == cm.activeNetwork,
+                        network = network,
+                    ),
+                )
             }
-            return null
+            return pickLanSegment(cands)
         }
 
-        /** 是否具备扫描前提（Wi-Fi/以太网 + 有 IPv4 网段）。按钮置灰判断用。 */
+        /** 旧签名（其他调用方沿用）：挑中的网段 → (selfIp, prefix)。 */
+        fun lanSegment(context: Context): Pair<Int, Int>? =
+            lanSegmentInfo(context)?.let { Pair(it.selfIp, it.prefix) }
+
+        /** 是否具备扫描前提（能挑出网段）。按钮置灰判断用。 */
         fun available(context: Context): Boolean = lanSegment(context) != null
+
+        /** 手机上是否有 VPN 在线（任一网络带 TRANSPORT_VPN）。 */
+        @Suppress("DEPRECATION")
+        fun isVpnActive(context: Context): Boolean {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return false
+            for (network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return true
+            }
+            return false
+        }
 
         /** 从地址里取端口；与默认相同或解析不出返回 null（不用加进探测列表）。 */
         fun customPort(url: String, defaultPort: Int): Int? {

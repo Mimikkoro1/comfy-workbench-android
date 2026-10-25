@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.data.discovery
 
+import android.net.Network
 import org.json.JSONObject
 
 /** ComfyUI /system_stats 命中：GPU 名（devices[0].name）与版本（system.comfyui_version），都可能为空串。 */
@@ -92,4 +93,65 @@ fun lanHitIpKey(url: String): Long {
         v = (v shl 8) or n.toLong()
     }
     return v
+}
+
+// ---- r41：开 VPN 时挑对网段 ----
+
+/** 一个网络的候选信息（LanScanner 从 ConnectivityManager 组装，这里只做纯挑选）。 */
+data class LanNetCandidate(
+    val wifi: Boolean,
+    val ethernet: Boolean,
+    val vpn: Boolean,
+    /** 非 loopback/link-local 的 IPv4；没有为 null。 */
+    val ipv4: Int?,
+    val prefix: Int,
+    val active: Boolean,
+    /** r42：候选对应的 Network（扫描探测绑定到这张网卡用）；测试/旧调用方默认 null。 */
+    val network: Network? = null,
+)
+
+/** 挑中的网段：本机 IP + 前缀。viaFallback = 只能回退到 active 网络（开 VPN 时的兜底）。 */
+data class LanSegment(
+    val selfIp: Int,
+    val prefix: Int,
+    val viaFallback: Boolean,
+    /** r42：挑中候选的 Network，原样带出给扫描绑定用。 */
+    val network: Network? = null,
+)
+
+/**
+ * 挑扫描网段：
+ * ① 带 Wi-Fi 且不带 VPN、有 IPv4（多个时优先 active）；② 带以太网且不带 VPN、有 IPv4；
+ * ③ 回退到 active 的网络——但仍要求带 Wi-Fi/以太网能力且有 IPv4（= r39 旧行为），viaFallback = true；
+ * ④ 否则 null（按钮置灰、不开扫）。
+ */
+fun pickLanSegment(cands: List<LanNetCandidate>): LanSegment? {
+    fun best(match: (LanNetCandidate) -> Boolean): LanNetCandidate? {
+        val list = cands.filter(match)
+        return list.firstOrNull { it.active } ?: list.firstOrNull()
+    }
+    val direct = best { it.ipv4 != null && !it.vpn && it.wifi }
+        ?: best { it.ipv4 != null && !it.vpn && it.ethernet }
+    if (direct != null) {
+        val ip = direct.ipv4 ?: return null
+        return LanSegment(ip, direct.prefix, viaFallback = false, network = direct.network)
+    }
+    val fallback = cands.firstOrNull { it.active && it.ipv4 != null && (it.wifi || it.ethernet) }
+        ?: return null
+    val ip = fallback.ipv4 ?: return null
+    return LanSegment(ip, fallback.prefix, viaFallback = true, network = fallback.network)
+}
+
+/**
+ * r42：[n] 非空且 [check] 通过（不抛异常、返回 true）时原样返回 [n]，否则 null。
+ * 绑定网络前的可用性预检用（网络已失效时 createSocket 会抛，不能让调用方崩）。
+ */
+fun <T : Any> usableOrNull(n: T?, check: (T) -> Boolean): T? {
+    if (n == null) return null
+    val ok = try {
+        check(n)
+    } catch (_: Exception) {
+        false
+    }
+    return if (ok) n else null
 }

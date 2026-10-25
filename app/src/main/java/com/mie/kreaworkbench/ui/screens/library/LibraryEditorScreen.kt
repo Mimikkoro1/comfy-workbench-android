@@ -53,6 +53,8 @@ import com.mie.kreaworkbench.ui.components.hazeSourceIfEnabled
 import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.locale.knownText
 import com.mie.kreaworkbench.ui.locale.str
+import com.mie.kreaworkbench.ui.theme.isClassic
+import com.mie.kreaworkbench.ui.theme.pageBackground
 import kotlinx.coroutines.launch
 
 /** 独立场景（不在 HomeLayer 里，没有共享背景）的底色：白字体系要有深底才站得住，
@@ -129,7 +131,7 @@ fun LibraryEditorScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(EditorPageBase).hazeSourceIfEnabled())
+        Box(Modifier.fillMaxSize().background(if (isClassic()) pageBackground() else EditorPageBase).hazeSourceIfEnabled())
         LargeBarScaffold(
             title = knownText(libName).ifBlank { editorTitle },
             onBack = onBack,
@@ -172,11 +174,15 @@ fun LibraryEditorScreen(
                     }
                     val scroll = rememberScrollState()
                     val panelShape = MaterialTheme.shapes.large
+                    // r46：经典主题面板换 surfaceBright 实心，光标/选区跟主题主色。
+                    val panelColor = if (isClassic()) MaterialTheme.colorScheme.surfaceBright else EditorPanel
+                    val selectionBg = if (isClassic()) MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                    else Color.White.copy(alpha = 0.30f)
                     CompositionLocalProvider(
                         // 深底上的选中态：默认的蓝色高亮几乎看不见，换成白色半透明 + 白把手
                         LocalTextSelectionColors provides TextSelectionColors(
                             handleColor = ImmersiveInk,
-                            backgroundColor = Color.White.copy(alpha = 0.30f),
+                            backgroundColor = selectionBg,
                         ),
                     ) {
                         Box(
@@ -185,7 +191,7 @@ fun LibraryEditorScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp)
                                 .clip(panelShape)
-                                .background(EditorPanel)
+                                .background(panelColor)
                                 .border(1.dp, ImmersiveHairline, panelShape)
                                 .verticalScroll(scroll)
                                 .navigationBarsPadding()
@@ -206,7 +212,7 @@ fun LibraryEditorScreen(
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = ImmersiveInk),
-                                cursorBrush = SolidColor(Color.White),
+                                cursorBrush = SolidColor(if (isClassic()) MaterialTheme.colorScheme.primary else Color.White),
                             )
                         }
                     }

@@ -76,7 +76,8 @@ class GenerationService : Service() {
                         break
                     }
                 }
-                delay(2000)
+                // r45：忙时降频到 5 秒（reconcileActive 只是低频安全网，kick 自带去重）；空闲仍 2 秒
+                delay(serviceTickMs(busy))
             }
         }
     }

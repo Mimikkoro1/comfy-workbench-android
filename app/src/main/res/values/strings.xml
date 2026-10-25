@@ -74,11 +74,12 @@
     <string name="label_negative">Negative prompt</string>
     <string name="please_select">Select</string>
     <string name="follow_system">System</string>
-    <string name="settings_server">ComfyUI address</string>
     <string name="settings_test">Test connection</string>
     <string name="settings_testing">Testing…</string>
-    <string name="settings_appearance">Appearance</string>
     <string name="settings_theme">Theme</string>
+    <string name="settings_style">Style</string>
+    <string name="style_glass">Glass</string>
+    <string name="style_classic">Classic</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
     <string name="settings_language">Language</string>
@@ -99,23 +100,20 @@
     <string name="show_password">Show password</string>
     <string name="hide_password">Hide password</string>
     <string name="auth_needed">Username and password required (401)</string>
-    <string name="server_history">Recent servers</string>
     <string name="settings_current_server">Current server</string>
     <string name="action_force_cancel_all">Force-cancel all tasks</string>
-    <string name="force_cancel_all_body">All unfinished tasks will be marked as cancelled.</string>
+    <string name="force_cancel_all_body">All unfinished tasks are marked as cancelled, and the queue on the current ComfyUI server is cleared too (including jobs submitted from the web UI). If the server is unreachable, only the local state is reset.</string>
+    <string name="force_clear_done">Server queue cleared, local tasks reset</string>
+    <string name="force_clear_unreachable">Server not responding. Local tasks were reset; try again once the computer is back.</string>
+    <string name="force_clear_still_busy">The server still has jobs running: ComfyUI on the computer may be stuck. Restart ComfyUI there and try again.</string>
     <string name="field_server_name">Name (optional)</string>
     <string name="action_save_server">Save this server</string>
-    <string name="saved_servers">Saved servers</string>
     <string name="saved_servers_empty">No saved servers yet. They show up here after you test or save.</string>
-    <string name="server_url_hint">http://192.168.0.1:8188</string>
-    <string name="gacha_url_hint">http://192.168.0.1:8787</string>
+    <string name="server_url_hint">http://PC-IP:8188</string>
+    <string name="gacha_url_hint">e.g. http://PC-IP:8787</string>
     <string name="gacha_history_empty">No recent addresses</string>
     <string name="action_pick_server">Choose a saved server</string>
-    <string name="action_edit_server">Edit server</string>
     <string name="action_pick_gacha">Choose a recent roll address</string>
-    <string name="preset_servers">Quick add</string>
-    <string name="preset_home">Home</string>
-    <string name="preset_away">Away</string>
     <string name="delete_server_title">Delete this server?</string>
     <string name="delete_server_body">Only removed from the saved list; the current connection stays unchanged.</string>
     <string name="more_settings">More settings</string>
@@ -137,6 +135,17 @@
     <string name="gacha_latency">%1$d ms latency</string>
     <string name="ping_timeout">Connection test timed out (65s). Try again.</string>
     <string name="about_unreleased">Unreleased</string>
+    <string name="settings_feedback">Feedback &amp; suggestions</string>
+    <string name="settings_feedback_sub">GitHub · Gitee · Copy diagnostics</string>
+    <string name="about_feedback_github">Send feedback on GitHub</string>
+    <string name="about_feedback_gitee">Send feedback on Gitee</string>
+    <string name="about_feedback_coolapk">Feedback on Coolapk</string>
+    <string name="about_copy_diagnostics">Copy diagnostics</string>
+    <string name="feedback_copied">Copied</string>
+    <string name="feedback_issue_title">"[Feedback] "</string>
+    <string name="feedback_issue_hint">Problem description:\n\nRepro steps:\n\n(Tip: tap &quot;Copy diagnostics&quot; under Settings → Feedback &amp; suggestions in the app, then paste below)</string>
+    <string name="feedback_last_test">Last connection test</string>
+    <string name="choice_cache_stale">Options from last cache, refreshing…</string>
     <string name="about_version">Version</string>
     <string name="about_system">System</string>
     <string name="cache_title">Cache</string>
@@ -181,8 +190,6 @@
     <string name="i2i_title">Use for image-to-image</string>
     <string name="i2i_body">Choose a workflow for this image:</string>
     <string name="import_workflow">Import workflow</string>
-    <string name="workflow_menu">Workflow: %1$s ▸</string>
-    <string name="manage_workflows">Manage workflows…</string>
     <string name="state_loading">Loading…</string>
     <string name="card_reference">Reference</string>
     <string name="card_count">Batch count</string>
@@ -190,7 +197,6 @@
     <string name="over_limit">%1$d images is over the limit of 8. Pick fewer sizes or a lower batch count.</string>
     <string name="card_video">Video settings</string>
     <string name="state_submitting">Submitting…</string>
-    <string name="text_open">View ▸</string>
     <string name="upload_slow_title">Upload is slow</string>
     <string name="upload_fail_title">Could not upload</string>
     <string name="upload_slow_body">This upload has taken over 10 seconds and is still running. Continue keeps uploading the original; Compress cancels it and uploads a smaller copy.</string>
@@ -248,8 +254,6 @@
     <string name="video_size_warn">Reference image %1$d×%2$d is over the suggested %3$d×%4$d. It will still be submitted at the original size and may fail if VRAM runs out.</string>
     <string name="video_size_use">Will submit at the reference size %1$d×%2$d.</string>
     <string name="video_size_fallback">720p if no image</string>
-    <string name="filter_include">Include</string>
-    <string name="filter_exclude">Exclude</string>
     <string name="empty_state_no_server">Not connected to ComfyUI yet</string>
     <string name="empty_state_no_server_body">Enter your PC\'s LAN address (same Wi-Fi) and test the connection.</string>
     <string name="empty_state_configure_server">Set up server</string>
@@ -279,7 +283,6 @@
     <string name="exported_name">Exported “%1$s”</string>
     <string name="export_failed">Could not export: %1$s</string>
     <string name="section_workflows">Workflows</string>
-    <string name="imported_at">Imported · %1$s</string>
     <string name="state_importing_long">Importing…</string>
     <string name="workflows_empty">No workflows yet. Tap Import workflow and choose a workflow + definition .json pair (or one API-format .json).</string>
     <string name="state_importing">Importing…</string>
@@ -346,6 +349,7 @@
     <string name="err_query_failed">Could not check the job</string>
     <string name="err_empty_file">File is empty</string>
     <string name="err_video_download">Could not download the video: %1$s</string>
+    <string name="err_image_download">Could not download the image: %1$s</string>
     <string name="err_reference_missing">Reference image is missing</string>
     <string name="err_upload_failed">Could not upload</string>
     <string name="upload_fail_ask">Could not upload the original image: %1$s. Try a compressed upload?</string>
@@ -366,7 +370,7 @@
     <!-- round13 第 1 项：进度行改为「Generating · 段1 · 段2」拼接，旧的整句格式废弃 -->
     <string name="phase_running_plain">Generating</string>
     <string name="phase_step_of">%1$d/%2$d steps</string>
-    <string name="phase_video_retry">Could not download the video. Tap to retry.</string>
+    <string name="phase_download_retry">Download failed. Tap to retry.</string>
     <string name="phase_downloading">Downloading %1$s</string>
     <string name="phase_done">Done</string>
     <string name="phase_failed">Could not finish: %1$s</string>
@@ -393,6 +397,9 @@
     <string name="err_join_colon">%1$s: %2$s</string>
     <string name="err_join_semi">%1$s; %2$s</string>
     <string name="err_model_not_found">Model not found: %1$s</string>
+    <string name="err_model_value_not_found">Value not in the server\'s list: %1$s</string>
+    <string name="err_model_show_raw">Show original error</string>
+    <string name="err_model_hide_raw">Hide original error</string>
     <string name="draw_cat">Category “%1$s”</string>
     <string name="draw_include">Include %1$s</string>
     <string name="draw_exclude">Exclude %1$s</string>
@@ -438,10 +445,9 @@
     <string name="err_album">Could not save to Photos</string>
     <string name="err_file_missing">File is missing</string>
     <string name="err_save">Could not save</string>
-    <string name="err_no_remote">No matching file on the server</string>
-    <string name="err_remote_delete">Could not delete on the server</string>
     <string name="err_decode">Cannot decode the image</string>
     <string name="err_net">Network error</string>
+    <string name="untitled_name">untitled.json</string>
     <string name="action_choose">Select</string>
     <string name="wf_prompt">Prompt</string>
     <string name="wf_negative">Negative prompt</string>
@@ -483,6 +489,8 @@
     <string name="wf_import_lib">Imported prompt library</string>
     <!-- r22 高级抽卡 + 生成按钮 -->
     <string name="gacha_advanced">Advanced roll</string>
+    <string name="gacha_no_server">No gacha server found yet</string>
+    <string name="gacha_go_settings">Set up now</string>
     <string name="gacha_guide_body">Advanced gacha needs gacha-server-lite running on your PC:\n1. Clone the repo (or download the ZIP)\n2. Install Python 3.10+; start.bat installs the dependencies on its first run\n3. Double-click start.bat (default port 8787) and keep the window open\n4. Enter http://&lt;PC LAN IP&gt;:8787 here\nYour phone and PC must be on the same LAN.</string>
     <string name="gacha_guide_never">Don\'t ask again</string>
     <string name="gacha_guide_repo">Open repo</string>
@@ -533,10 +541,53 @@
     <string name="err_gacha_empty">The roll service returned no prompt</string>
     <string name="err_gacha_http">Roll service error (%1$d)</string>
     <string name="scan_action">Find on network</string>
-    <string name="scan_progress">Scanning %1$s.0/24… %2$d/%3$d</string>
+    <string name="scan_progress">Scanning %2$s.x · phone IP %1$s (%3$d/%4$d)</string>
+    <string name="scan_vpn_hint">A VPN is on — this may be the wrong subnet. Try turning the VPN off.</string>
     <string name="scan_need_wifi">Available on Wi-Fi</string>
     <string name="scan_filled_hint">Filled in — tap Test connection to confirm</string>
-    <string name="scan_empty">Nothing found. Check: phone and PC on the same Wi-Fi; ComfyUI started with --listen; firewall allows ports 8188 / 8787; guest networks, AP isolation or a VPN on the phone can block discovery.</string>
+    <string name="scan_empty_lead">Nothing found. Please check each item:</string>
+    <string name="scan_check_1">ComfyUI is running and was started with --listen</string>
+    <string name="scan_check_2">Phone and computer are on the same Wi-Fi</string>
+    <string name="scan_check_3">VPN / accelerator on the phone is off</string>
+    <string name="scan_check_4">The computer\'s firewall allows port 8188 (roll service: 8787)</string>
+    <string name="scan_check_vpn_on">VPN / accelerator on the phone is off (a VPN is currently on)</string>
+    <string name="scan_empty_tail">If it still fails, enter the address manually.</string>
+    <string name="scan_empty_extra">Guest networks and router AP isolation can also block discovery</string>
+    <string name="scan_checklist_title">Check before you scan</string>
+    <string name="scan_check_off">Don\'t show again</string>
+    <string name="scan_check_start">Start scanning</string>
+    <string name="scan_fill_manually">Enter address manually</string>
+    <string name="scan_close">Close</string>
+    <!-- r41 局域网权限引导（Android 17 / targetSdk 37 起） -->
+    <string name="lan_perm_title">Local network access needed</string>
+    <string name="lan_perm_body">To reach ComfyUI on your computer, Android 17 asks for separate permission to access nearby devices. Tap Grant and the system will show the prompt. It is only used to connect to the server you enter and find computers on your network — nothing is uploaded.</string>
+    <string name="lan_perm_go">Grant</string>
+    <string name="lan_perm_later">Not now</string>
+    <string name="lan_perm_denied_title">No local network permission</string>
+    <string name="lan_perm_denied_body">Without this permission the phone can\'t reach computers on the local network.</string>
+    <string name="lan_perm_open_settings">Open system settings</string>
+    <string name="lan_perm_hint">Local network access not allowed — tap to enable</string>
+    <!-- r41 连接失败分步文案（不出现异常类名） -->
+    <string name="conn_err_bad_url">That address doesn\'t look right. Example: http://PC-IP:8188</string>
+    <string name="conn_err_local_net_blocked">Can\'t reach the computer on the local network. On Android 17, allow Nearby devices (local network) for this app in system settings first, then retry.</string>
+    <string name="conn_err_timeout">Connection timed out. The phone and the computer may be on different networks, or a firewall is blocking that port.</string>
+    <string name="conn_err_refused">The computer refused the connection. ComfyUI may not be running, the port may be wrong (default 8188), or it wasn\'t started with --listen.</string>
+    <string name="conn_err_no_route">Network unreachable. Make sure the phone is on the same Wi-Fi and turn off any VPN.</string>
+    <string name="conn_err_unknown_host">Can\'t resolve that name. Check the spelling or your network.</string>
+    <string name="conn_err_tls">Secure connection failed: the certificate isn\'t trusted, or the server isn\'t actually https (try http://).</string>
+    <string name="conn_err_not_found">That address responds but doesn\'t look like ComfyUI (404). Check the address or port.</string>
+    <string name="conn_err_http_other">The server returned an error (HTTP %1$d).</string>
+    <string name="conn_err_not_comfy">That address responds, but it isn\'t ComfyUI — the port may belong to another service.</string>
+    <string name="conn_err_ws_auth">The page works, but the live connection needs authentication. Generation progress may not show.</string>
+    <string name="conn_err_ws_rejected">The page works, but the server refused the live connection. Generation progress may not show.</string>
+    <string name="conn_err_ws_failed">The page works, but the live connection couldn\'t be established. Generation progress may not show.</string>
+    <string name="err_cannot_connect_lan_permission">Cannot reach ComfyUI. Check that the server is running and the address and port are right (default 8188). On Android 17, also allow Nearby devices (local network) for this app in system settings.</string>
+    <string name="ping_detail_show">Details</string>
+    <string name="ping_detail_copy">Copy</string>
+    <string name="err_detail_title">Error details</string>
+    <string name="err_detail_open">Details</string>
+    <string name="err_detail_copy">Copy</string>
+    <string name="err_detail_copied">Copied</string>
     <string name="err_gacha_no_prompt_slot">This workflow has no prompt field, so the rolled text can\'t be applied</string>
     <string name="draw_library_title">Prompt library</string>
     <string name="draw_library_open">Choose a category</string>
@@ -553,6 +604,11 @@
     <string name="cancel_gen_body">Only the one running now is cancelled. Jobs already queued still run.</string>
     <string name="cancel_gen_confirm">Cancel this one</string>
     <string name="cancel_gen_dismiss">Keep it</string>
+    <string name="queue_stuck_hint">Queued too long? Tap to cancel or force-clear.</string>
+    <string name="queue_stuck_force_clear">Force-clear queue</string>
+    <string name="queue_stuck_dialog_title">Job may be stuck</string>
+    <string name="queue_stuck_dialog_body">This job has had no progress for over 5 minutes. ComfyUI on the computer may be stuck.</string>
+    <string name="queue_stuck_wait">Keep waiting</string>
     <plurals name="image_total">
         <item quantity="one">%d image</item>
         <item quantity="other">%d images</item>
@@ -564,10 +620,6 @@
     <plurals name="steps">
         <item quantity="one">%d step</item>
         <item quantity="other">%d steps</item>
-    </plurals>
-    <plurals name="imported_on">
-        <item quantity="one">%1$d entry · imported %2$s</item>
-        <item quantity="other">%1$d entries · imported %2$s</item>
     </plurals>
     <plurals name="entry_count">
         <item quantity="one">%d entry</item>
@@ -599,9 +651,12 @@
     <string name="group_connection">ComfyUI server</string>
     <string name="group_look">Appearance &amp; language</string>
     <string name="group_storage">Storage &amp; cache</string>
-    <string name="group_about">About</string>
     <string name="status_not_set">Not set</string>
     <string name="status_cache">Cache %1$s</string>
+    <!-- round43: connection dot (accessibility only) -->
+    <string name="status_connected">Connected</string>
+    <string name="status_failed">Connection failed</string>
+    <string name="status_unknown">Not tested</string>
     <!-- round14 -->
     <string name="update_check">Check for updates</string>
     <string name="update_checking">Checking…</string>
@@ -612,6 +667,25 @@
     <string name="update_ignore">Skip this version</string>
     <string name="update_later">Later</string>
     <string name="update_no_notes">(No release notes)</string>
+    <!-- r40 update source -->
+    <string name="update_source">Update source</string>
+    <string name="update_source_option_auto">Automatic</string>
+    <string name="update_source_auto_cn">Automatic (Mainland China)</string>
+    <string name="update_source_auto_global">Automatic (Global)</string>
+    <!-- r40 in-app download -->
+    <string name="update_download_install">Download &amp; install</string>
+    <string name="update_download_cancel">Cancel download</string>
+    <string name="update_retry">Retry</string>
+    <string name="update_download_browser">Download in browser</string>
+    <string name="update_install">Install</string>
+    <string name="update_install_title">Install update</string>
+    <string name="update_install_permission">Allow this app to install updates to continue</string>
+    <string name="update_install_go">Open settings</string>
+    <string name="update_apk_invalid">The update package is invalid and was deleted</string>
+    <string name="update_no_apk">No download URL available</string>
+    <string name="update_download_failed">Download failed: %1$s</string>
+    <string name="update_download_progress">Downloaded %1$s / %2$s MB</string>
+    <string name="update_download_progress_no_total">Downloaded %1$s MB</string>
     <string name="info_file_size">File size: %1$s</string>
     <string name="info_created_at">Created: %1$s</string>
     <string name="size_full">1152×1728 · 2:3 · full body (default)</string>

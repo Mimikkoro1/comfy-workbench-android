@@ -56,6 +56,7 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.ui.motion.buzz
 import com.mie.kreaworkbench.ui.motion.pressScale
 import com.mie.kreaworkbench.ui.theme.cardBorder
+import com.mie.kreaworkbench.ui.theme.isClassic
 
 enum class AppTab(@StringRes val labelRes: Int) {
     T2I(R.string.tab_generate),
@@ -133,6 +134,8 @@ fun HeaderIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
 fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Modifier) {
     val shape = MaterialTheme.shapes.extraLarge
     val haptic = LocalHapticFeedback.current
+    val classic = isClassic()
+    val scheme = MaterialTheme.colorScheme
     // 固定暗底白字，不跟主题色，浅色图和深色图都看得清。
     val itemShape = RoundedCornerShape(50)
     Box(
@@ -155,10 +158,20 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
         ) {
             AppTab.entries.forEach { item ->
                 val selected = tab == item
-                val ink = if (selected) ImmersiveInk else ImmersiveInkMuted
+                // 经典：选中态用主色（素皮的样子）；毛玻璃：白字体系不变。
+                val ink = when {
+                    selected && classic -> scheme.primary
+                    selected -> ImmersiveInk
+                    classic -> scheme.onSurfaceVariant
+                    else -> ImmersiveInkMuted
+                }
                 val press = remember { MutableInteractionSource() }
                 val pill by animateColorAsState(
-                    targetValue = if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent,
+                    targetValue = when {
+                        selected && classic -> scheme.primary.copy(alpha = 0.14f)
+                        selected -> Color.White.copy(alpha = 0.16f)
+                        else -> Color.Transparent
+                    },
                     animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Color>(),
                     label = "tab-pill",
                 )
@@ -169,7 +182,10 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                         .pressScale(press)
                         .clip(itemShape)
                         .background(pill, itemShape)
-                        .clickable(interactionSource = press, indication = ripple(color = Color.White)) {
+                        .clickable(
+                            interactionSource = press,
+                            indication = ripple(color = if (classic) scheme.primary else Color.White),
+                        ) {
                             haptic.buzz(HapticFeedbackType.SegmentTick)
                             onSelect(item)
                         },
@@ -177,7 +193,17 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         val label = stringResource(item.labelRes)
-                        ImmersiveIcon(tabIcon(item), label, size = 22.dp, alpha = if (selected) 1f else 0.72f)
+                        ImmersiveIcon(
+                            tabIcon(item),
+                            label,
+                            size = 22.dp,
+                            alpha = if (selected) 1f else 0.72f,
+                            tint = when {
+                                selected && classic -> scheme.primary
+                                classic -> scheme.onSurfaceVariant
+                                else -> null
+                            },
+                        )
                         Text(
                             label,
                             color = ink,

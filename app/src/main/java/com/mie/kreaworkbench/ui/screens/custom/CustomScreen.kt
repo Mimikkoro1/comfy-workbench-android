@@ -42,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,6 +69,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +80,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.Dices
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
@@ -86,11 +90,15 @@ import com.mie.kreaworkbench.data.modelFileName
 import com.mie.kreaworkbench.data.workflows.Specs
 import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.service.line
+import com.mie.kreaworkbench.service.ForceClearOutcome
+import com.mie.kreaworkbench.service.queuedLooksStuck
+import kotlinx.coroutines.delay
 import com.mie.kreaworkbench.data.db.ImageRow
 import com.mie.kreaworkbench.ui.components.ImmersiveHairline
 import com.mie.kreaworkbench.ui.components.ImmersiveIcon
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
+import com.mie.kreaworkbench.ui.components.LocalOverPhoto
 import com.mie.kreaworkbench.ui.components.ImmersiveShadow
 import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassBottomSheet
@@ -98,6 +106,8 @@ import com.mie.kreaworkbench.ui.components.GlassCard
 import com.mie.kreaworkbench.ui.components.GlassDanger
 import com.mie.kreaworkbench.ui.components.GlassPopup
 import com.mie.kreaworkbench.ui.components.LocalGlassDismiss
+import com.mie.kreaworkbench.ui.components.LocalToaster
+import com.mie.kreaworkbench.ui.components.notify
 import com.mie.kreaworkbench.ui.components.glassPopupPanel
 import com.mie.kreaworkbench.ui.components.suppressIme
 import com.mie.kreaworkbench.ui.components.glass
@@ -116,6 +126,7 @@ import com.mie.kreaworkbench.ui.screens.gen.StatusScrim
 import com.mie.kreaworkbench.ui.screens.gen.capsuleHint
 import com.mie.kreaworkbench.ui.screens.gen.capsuleStatus
 import com.mie.kreaworkbench.ui.theme.PhotoBackdrop
+import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.ui.theme.PhotoOnBackdrop
 import com.mie.kreaworkbench.ui.theme.SystemBarAppearance
 import org.json.JSONObject
@@ -141,6 +152,7 @@ fun CustomScreen(
     pendingWorkflowId: String?,
     onConsumePending: () -> Unit,
     onGallery: () -> Unit,
+    onOpenGachaSettings: () -> Unit = {},
     vm: CustomModel = viewModel(),
 ) {
     // 「用于图生图」：pending 往往比 currentWorkflow 先到。id 还没对上时不消费，
@@ -214,6 +226,38 @@ fun CustomScreen(
         }
     }
     var cancelAsk by remember { mutableStateOf(false) }
+    // r44：排队/运行太久的一次性「卡住了」提示（同一任务只弹一次）+ 卡住判定的定时时间源
+    var stallAsk by remember { mutableStateOf<String?>(null) }
+    val stallNotified = remember { HashSet<String>() }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(progressJob?.clientJobId) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(15_000)
+        }
+    }
+    val stalledJob = progressJob?.takeIf { it.stalledSince > 0L }
+    LaunchedEffect(stalledJob?.clientJobId) {
+        val id = stalledJob?.clientJobId ?: return@LaunchedEffect
+        if (id !in stallNotified) {
+            stallNotified.add(id)
+            stallAsk = id
+        }
+    }
+    val uiCtx = LocalContext.current
+    val appCtx = uiCtx.applicationContext as KreaApp
+    val toaster = LocalToaster.current
+    // 「强制清空队列」共用出口：本地全部收掉 + 清当前服务器队列，结果 toast（文案复用设置页那三条）
+    val forceClearAll: () -> Unit = {
+        appCtx.container.engine.forceCancelAll(clearServerQueue = true) { outcome ->
+            val msg = when (outcome) {
+                ForceClearOutcome.CLEARED -> uiCtx.getString(R.string.force_clear_done)
+                ForceClearOutcome.SERVER_UNREACHABLE -> uiCtx.getString(R.string.force_clear_unreachable)
+                ForceClearOutcome.SERVER_STILL_BUSY -> uiCtx.getString(R.string.force_clear_still_busy)
+            }
+            notify(toaster, uiCtx, msg)
+        }
+    }
     val focus = LocalFocusManager.current
     val view = LocalView.current
     // 参数类（尺寸/种子/张数/视频参数/进阶）进「更多设置」。
@@ -234,7 +278,8 @@ fun CustomScreen(
     val summary = customSummary(vm, LocalContext.current)
     val media = vm.mediaResults()
     val onPhoto = media.isNotEmpty()
-    val metaColor = if (onPhoto) Color.White.copy(alpha = 0.88f) else scheme.onSurfaceVariant
+        // r46：经典下无图时底是 DarkBg 深色，字保持白；毛玻璃维持 r45 的主题副字色。
+    val metaColor = if (onPhoto || isClassic()) Color.White.copy(alpha = 0.88f) else scheme.onSurfaceVariant
     val mainKey = vm.mainPromptKey()
     val hasLib by vm.hasPromptLibrary.collectAsState()
     // 普通抽卡才在生成页抽本地库。高级抽卡自己有四筛，这里不放骰子。
@@ -279,15 +324,90 @@ fun CustomScreen(
                 ),
         ) {
             if (failedJob != null) {
-                // 没有进行中任务时，最新一条若是失败，缩成一行错误状态（老的大卡片不再放顶部）
-                Text(
-                    failedJob.line(LocalContext.current),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (onPhoto) Color(0xFFFF8A80) else scheme.error,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
+                // 没有进行中任务时，最新一条若是失败，底栏显示醒目错误条（r43：带图标、最多两行、
+                // 整条可点开完整报错——提交瞬间失败没有 errorDetail 也能看全 error 本身，
+                // 不再是一行截断的小红字）。r44：弹窗只显示人话摘要，ComfyUI 原文折叠在「展开原文」里。
+                var detailAsk by remember { mutableStateOf<Triple<String, String?, String?>?>(null) }
+                val ctx = LocalContext.current
+                val failedLine = failedJob.line(ctx)
+                val openDetail = {
+                    detailAsk = Triple(failedJob.error, failedJob.errorDetail, failedJob.rawError)
+                }
+                val barShape = RoundedCornerShape(16.dp)
+                if (onPhoto) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp)
+                            .clip(barShape)
+                            .immersiveGlass(20.dp)
+                            .border(1.dp, ImmersiveHairline, barShape)
+                            // 深红只在玻璃底上叠一层；Glass* 组件本身零修改
+                            .background(GlassDanger.copy(alpha = 0.18f))
+                            .clickable(onClick = openDetail)
+                            .semantics(mergeDescendants = true) {}
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ImmersiveIcon(Lucide.CircleAlert, null, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                failedLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFFF8A80),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(R.string.err_detail_open),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFF8A80),
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp)
+                            .clip(barShape)
+                            .background(scheme.errorContainer)
+                            .clickable(onClick = openDetail)
+                            .semantics(mergeDescendants = true) {}
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Lucide.CircleAlert,
+                                null,
+                                tint = scheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                failedLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onErrorContainer,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(R.string.err_detail_open),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = scheme.onErrorContainer,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+                detailAsk?.let { (err, det, raw) ->
+                    ErrorDetailDialog(error = err, detail = det, raw = raw, onDismiss = { detailAsk = null })
+                }
             }
             if (vm.message.isNotBlank()) {
                 Text(
@@ -352,7 +472,14 @@ fun CustomScreen(
                     generating = generating,
                     label = if (vm.submitting) stringResource(R.string.state_submitting) else stringResource(R.string.action_generate),
                     status = progressJob?.let { capsuleStatus(it, queuedExtra, LocalContext.current) }.orEmpty(),
-                    hint = progressJob?.let { capsuleHint(it, LocalContext.current) }.orEmpty(),
+                    hint = progressJob?.let { job ->
+                        // r44：排队太久 / 长时间无进展时，副行换成卡住提示（沿用原副行位置，不加新控件）
+                        if (queuedLooksStuck(job.phase, job.phaseSince, nowMs) || job.stalledSince > 0L) {
+                            stringResource(R.string.queue_stuck_hint)
+                        } else {
+                            capsuleHint(job, LocalContext.current)
+                        }
+                    }.orEmpty(),
                     fraction = bar?.bar ?: -1f,
                     indeterminate = bar?.indeterminate == true,
                     enabled = !vm.loading && (generating || canEnqueue),
@@ -366,6 +493,11 @@ fun CustomScreen(
                         }
                         if (job?.phase == "downloading" && job.downloadFailed) {
                             vm.retryDownload(job.clientJobId)
+                            return@GenerateCapsule
+                        }
+                        // r44：排队中点按直接弹取消（以前点按没反应，只能长按，没人知道）
+                        if (job?.phase == "queued") {
+                            cancelAsk = true
                             return@GenerateCapsule
                         }
                         if (!canEnqueue) return@GenerateCapsule
@@ -517,10 +649,26 @@ fun CustomScreen(
 
     if (cancelAsk && progressJob != null) {
         val jobId = progressJob.clientJobId
+        // r44：卡住（排队太久或长时间无进展）时弹窗多一段说明 + 一个「强制清空队列」；未卡住与 r43 一致
+        val stuck = queuedLooksStuck(progressJob.phase, progressJob.phaseSince, nowMs) || progressJob.stalledSince > 0L
         GlassAlertDialog(
             onDismissRequest = { cancelAsk = false },
             title = { Text(stringResource(R.string.cancel_gen_title)) },
-            text = { Text(stringResource(R.string.cancel_gen_body)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.cancel_gen_body))
+                    if (stuck) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (progressJob.stalledSince > 0L) {
+                                stringResource(R.string.queue_stuck_dialog_body)
+                            } else {
+                                stringResource(R.string.queue_stuck_hint)
+                            },
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     cancelAsk = false
@@ -528,7 +676,35 @@ fun CustomScreen(
                 }) { Text(stringResource(R.string.cancel_gen_confirm), color = GlassDanger) }
             },
             dismissButton = {
-                TextButton(onClick = { cancelAsk = false }) { Text(stringResource(R.string.cancel_gen_dismiss)) }
+                if (stuck) {
+                    Row {
+                        TextButton(onClick = {
+                            cancelAsk = false
+                            forceClearAll()
+                        }) { Text(stringResource(R.string.queue_stuck_force_clear), color = GlassDanger) }
+                        TextButton(onClick = { cancelAsk = false }) { Text(stringResource(R.string.cancel_gen_dismiss)) }
+                    }
+                } else {
+                    TextButton(onClick = { cancelAsk = false }) { Text(stringResource(R.string.cancel_gen_dismiss)) }
+                }
+            },
+        )
+    }
+
+    // r44 看门狗：长时间无进展只提示一次，强制清空或继续等待都由用户决定（不自动动手）
+    stallAsk?.let {
+        GlassAlertDialog(
+            onDismissRequest = { stallAsk = null },
+            title = { Text(stringResource(R.string.queue_stuck_dialog_title)) },
+            text = { Text(stringResource(R.string.queue_stuck_dialog_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    stallAsk = null
+                    forceClearAll()
+                }) { Text(stringResource(R.string.queue_stuck_force_clear), color = GlassDanger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { stallAsk = null }) { Text(stringResource(R.string.queue_stuck_wait)) }
             },
         )
     }
@@ -620,7 +796,7 @@ fun CustomScreen(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                AdvGachaFilterPanel(vm, s)
+                AdvGachaFilterPanel(vm, s, onGoSettings = onOpenGachaSettings)
                 Spacer(Modifier.height(12.dp))
                 val close = LocalGlassDismiss.current
                 TextButton(
@@ -770,6 +946,72 @@ fun CustomScreen(
     }
 }
 
+/**
+ * r43：失败详情弹窗（r42 的内联版抽出来复用）。标题/样式/复制行为与 r42 一致：
+ * 内容可长按选中、可复制。r44：默认只显示人话摘要（error）与 r42 详情（detail）；
+ * ComfyUI 原文（raw）非空时折叠在「展开原文」里，展开后小号等宽字、可选中；
+ * 「复制」始终带「摘要 + 详情 + 原文」全部，不受折叠状态影响。
+ */
+@Composable
+private fun ErrorDetailDialog(error: String, detail: String?, raw: String?, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val toaster = LocalToaster.current
+    var showRaw by remember { mutableStateOf(false) }
+    val visible = errorDialogText(error, detail).ifBlank { stringResource(R.string.err_unknown_reason) }
+    val copyText = errorCopyText(error, detail, raw).ifBlank { visible }
+    GlassAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.err_detail_title)) },
+        text = {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 320.dp),
+            ) {
+                SelectionContainer {
+                    Column {
+                        Text(visible, fontSize = 11.sp, color = ImmersiveInkMuted)
+                        if (showRaw && !raw.isNullOrBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                raw,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = ImmersiveInkMuted,
+                            )
+                        }
+                    }
+                }
+                if (!raw.isNullOrBlank()) {
+                    TextButton(onClick = { showRaw = !showRaw }) {
+                        Text(
+                            stringResource(if (showRaw) R.string.err_model_hide_raw else R.string.err_model_show_raw),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                runCatching {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText("detail", copyText))
+                }
+                notify(toaster, ctx, ctx.getString(R.string.err_detail_copied))
+            }) {
+                Text(stringResource(R.string.err_detail_copy))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_done))
+            }
+        },
+    )
+}
+
 /** 主列让给大图。上面只留加载、文本结果和负向词。参考图和参考视频是左下角一排槽位。 */
 @Composable
 private fun ColumnScope.ImmersiveStage(
@@ -787,7 +1029,8 @@ private fun ColumnScope.ImmersiveStage(
 ) {
     val scheme = MaterialTheme.colorScheme
     val textRows = vm.textResults()
-    val ink = if (onPhoto) Color.White.copy(alpha = 0.85f) else scheme.onSurfaceVariant
+    // r46：经典下无图时底是 DarkBg 深色，字保持白；毛玻璃维持 r45 的主题副字色。
+    val ink = if (onPhoto || isClassic()) Color.White.copy(alpha = 0.85f) else scheme.onSurfaceVariant
     val hasTop = vm.loading || textRows.isNotEmpty() || negatives.isNotEmpty()
     val slots = refSlots(vm, images, videos)
     // r29.2：文本结果要能整块读完、按钮始终露出来。
@@ -798,7 +1041,9 @@ private fun ColumnScope.ImmersiveStage(
         slots.isNotEmpty() -> 84.dp // 参考槽 76 + 底距 4 + 间隙
         else -> 0.dp
     }
-    Box(Modifier.weight(1f).fillMaxWidth()) {
+    // r46：整个舞台直接压在大图上（经典下白字仍压图）；面（玻璃卡、参考槽）内部自己 provide 回 false。
+    CompositionLocalProvider(LocalOverPhoto provides true) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         if (hasTop) {
             Column(
                 Modifier
@@ -846,6 +1091,7 @@ private fun ColumnScope.ImmersiveStage(
             )
         }
         // r29.3：生成中不再在画面中央放占位方块——底部胶囊已经有进度/排队状态，这里留空更干净。
+        }
     }
 }
 
@@ -916,6 +1162,8 @@ private fun RefSlot(
                 .clickable { if (slot.filled) viewing = true else choosing = true },
             contentAlignment = Alignment.Center,
         ) {
+            // 参考槽是实心小面：里面的加号跟主题字色，不跟「压图白字」。
+            CompositionLocalProvider(LocalOverPhoto provides false) {
             when {
                 slot.image != null -> AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current).data(slot.image).size(240).build(),
@@ -931,6 +1179,7 @@ private fun RefSlot(
                 )
                 slot.filled -> Icon(Lucide.Video, desc, tint = PhotoOnBackdrop)
                 else -> ImmersiveIcon(Lucide.Plus, desc, size = 22.dp)
+            }
             }
         }
         if (choosing) {

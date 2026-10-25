@@ -314,7 +314,7 @@ fun SpecRow(
                         )
                     }
                 } else {
-                    // 空值显示「请选择」；有值但不在本机列表才显示「本机未找到」
+                    // 空值显示「请选择」；有值但不在本机列表才显示「本机未找到」（r43：整段标红）
                     val please = stringResource(R.string.please_select)
                     val placeholder = if (value.isBlank()) please else stringResource(R.string.model_missing, value)
                     val labels = if (found) choices else listOf(placeholder) + choices
@@ -322,6 +322,7 @@ fun SpecRow(
                         value = if (found) value else placeholder,
                         options = labels,
                         modifier = Modifier.fillMaxWidth().then(dimMod),
+                        valueColor = if (value.isNotBlank() && !found) errInk else null,
                     ) { i ->
                         val chosen = if (found) {
                             choices.getOrNull(i)
@@ -333,14 +334,6 @@ fun SpecRow(
                             vm.setText(key, it)
                             vm.persist()
                         }
-                    }
-                    if (value.isNotBlank() && !found) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.value_not_in_list),
-                            fontSize = 11.sp,
-                            color = errInk,
-                        )
                     }
                 }
                 if (loraEntry != null) {

@@ -16,7 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,11 +34,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mie.kreaworkbench.BuildConfig
 import com.mie.kreaworkbench.KreaApp
+import com.mie.kreaworkbench.data.settings.SettingsStore
 import com.mie.kreaworkbench.data.update.UpdateChecker
 import com.mie.kreaworkbench.data.update.UpdateResult
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LocalToaster
+import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.notify
 import kotlinx.coroutines.launch
 import com.mie.kreaworkbench.R
@@ -49,6 +53,9 @@ import com.mie.kreaworkbench.ui.components.GroupedItem
  */
 const val ABOUT_GITHUB_URL = "https://github.com/Mimikkoro1/comfy-workbench-android"
 const val ABOUT_LICENSE_URL = "https://github.com/Mimikkoro1/comfy-workbench-android/blob/main/LICENSE"
+const val ABOUT_GITEE_ISSUES_NEW_URL = "https://gitee.com/Mimikkoro1/comfy-workbench-android/issues/new"
+// TODO(owner): 填酷安帖子链接；留空时「酷安反馈」行不显示
+const val ABOUT_COOLAPK_URL = ""
 
 /** http(s) 才可打开；空字符串和其它占位都不跳转。 */
 internal fun aboutOpenUrl(raw: String): String? {
@@ -58,14 +65,24 @@ internal fun aboutOpenUrl(raw: String): String? {
 }
 
 /** 设置页点进来的关于二级页。返回走 Overlay 的 pop（返回键 / 预测性返回 / 顶栏返回）。
- *  r38：新增「重新查看快速开始」入口（[onQuickStart]），NavModel.openOnboarding 保证不叠栈。 */
+ *  r38：新增「重新查看快速开始」入口（[onQuickStart]），NavModel.openOnboarding 保证不叠栈。
+ *  r43：反馈入口整组搬到设置首页的「反馈与建议」页，这里不再重复放。 */
 @Composable
-fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
+fun AboutScreen(
+    onBack: () -> Unit,
+    onQuickStart: () -> Unit,
+) {
     val context = LocalContext.current
     val name = stringResource(R.string.app_name)
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     var checking by remember { mutableStateOf(false) }
+    // r40：更新下载源（auto / gitee / github），单独存 DataStore；auto 时副标题显示当前实际判定
+    var updateSource by remember { mutableStateOf(SettingsStore.UPDATE_SOURCE_AUTO) }
+    var sourceAsk by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        updateSource = (context.applicationContext as KreaApp).container.settings.updateSource()
+    }
     SettingsPageScaffold(title = stringResource(R.string.title_about), onBack = onBack) { padding ->
         Column(
             Modifier
@@ -98,7 +115,7 @@ fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
             CardGroup {
                 GroupedItem(
                     index = 0,
-                    count = 4,
+                    count = 5,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_version)) },
                     supporting = { Text("${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}") },
@@ -106,7 +123,7 @@ fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
                 // round14：手动检查更新（无视 24h 间隔与「忽略此版本」）
                 GroupedItem(
                     index = 1,
-                    count = 3,
+                    count = 5,
                     onClick = {
                         if (!checking) {
                             checking = true
@@ -128,16 +145,34 @@ fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
                         null
                     },
                 )
-                // r38：快速开始复看入口（原设置页一级入口移到这里）。
+                // r40：更新下载源（自动 / Gitee / GitHub）
                 GroupedItem(
                     index = 2,
-                    count = 4,
+                    count = 5,
+                    onClick = { sourceAsk = true },
+                    headline = { Text(stringResource(R.string.update_source)) },
+                    supporting = {
+                        Text(
+                            when (updateSource) {
+                                SettingsStore.UPDATE_SOURCE_GITEE -> "Gitee"
+                                SettingsStore.UPDATE_SOURCE_GITHUB -> "GitHub"
+                                else -> stringResource(
+                                    if (UpdateChecker.isInChina()) R.string.update_source_auto_cn else R.string.update_source_auto_global,
+                                )
+                            },
+                        )
+                    },
+                )
+                // r38：快速开始复看入口（原设置页一级入口移到这里）。
+                GroupedItem(
+                    index = 3,
+                    count = 5,
                     onClick = onQuickStart,
                     headline = { Text(stringResource(R.string.about_quick_start)) },
                 )
                 GroupedItem(
-                    index = 3,
-                    count = 4,
+                    index = 4,
+                    count = 5,
                     onClick = null,
                     headline = { Text(stringResource(R.string.about_system)) },
                     supporting = {
@@ -162,6 +197,43 @@ fun AboutScreen(onBack: () -> Unit, onQuickStart: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (sourceAsk) {
+        GlassAlertDialog(
+            onDismissRequest = { sourceAsk = false },
+            title = { Text(stringResource(R.string.update_source)) },
+            text = {
+                Column {
+                    listOf(
+                        SettingsStore.UPDATE_SOURCE_AUTO to stringResource(R.string.update_source_option_auto),
+                        SettingsStore.UPDATE_SOURCE_GITEE to "Gitee",
+                        SettingsStore.UPDATE_SOURCE_GITHUB to "GitHub",
+                    ).forEach { (value, label) ->
+                        TextButton(
+                            onClick = {
+                                sourceAsk = false
+                                updateSource = value
+                                scope.launch {
+                                    runCatching {
+                                        (context.applicationContext as KreaApp).container.settings.setUpdateSource(value)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                if (updateSource == value) "✓ $label" else label,
+                                fontWeight = if (updateSource == value) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { sourceAsk = false }) { Text(stringResource(R.string.action_done)) }
+            },
+        )
     }
 }
 
