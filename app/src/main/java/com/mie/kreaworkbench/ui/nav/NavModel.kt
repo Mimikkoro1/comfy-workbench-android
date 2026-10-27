@@ -68,9 +68,9 @@ class NavModel(app: Application) : AndroidViewModel(app) {
         .map { it.currentWorkflow }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
-    /** r36.1 引导页①步判定：服务器地址已配好。 */
+    /** r36.1 first onboarding step: a server is configured (a direct URL or, since v0.5.2, an SSH tunnel). */
     val serverReady: StateFlow<Boolean> = c.settings.flow
-        .map { it.serverUrl.isNotBlank() }
+        .map { it.hasServer }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** r38 E6：生成页空状态里「当前存在的内置模板」（随删除 / 恢复自动刷新）。 */
@@ -92,7 +92,7 @@ class NavModel(app: Application) : AndroidViewModel(app) {
         // 绝不替用户置位，也不把引导从栈里踢掉——从连接页返回仍落回引导页。
         viewModelScope.launch {
             val s = c.settings.current()
-            if (!s.onboarded && (s.serverUrl.isBlank() || s.currentWorkflow.isBlank())) {
+            if (!s.onboarded && (!s.hasServer || s.currentWorkflow.isBlank())) {
                 push(Overlay.Onboarding)
             }
         }

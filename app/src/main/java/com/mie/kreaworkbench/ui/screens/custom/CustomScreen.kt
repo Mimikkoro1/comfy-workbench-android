@@ -210,8 +210,8 @@ fun CustomScreen(
     }
     // r39：设置真正从磁盘加载完成后才按真实地址刷新；key 带 loaded，避免拿 stateIn 初值（默认地址）开刷。
     // 函数内部自带单飞 + 同址 10s 防抖，tab 来回切不会狂刷。
-    LaunchedEffect(gachaOn, vm.settingsLoaded, s.advGachaUrl) {
-        if (gachaOn && vm.settingsLoaded) vm.refreshGachaMasters(s.advGachaUrl)
+    LaunchedEffect(gachaOn, vm.settingsLoaded, vm.gachaBase) {
+        if (gachaOn && vm.settingsLoaded) vm.refreshGachaMasters(vm.gachaBase)
     }
     var paramsOpen by remember { mutableStateOf(false) }
     var gachaGuide by remember { mutableStateOf(false) }

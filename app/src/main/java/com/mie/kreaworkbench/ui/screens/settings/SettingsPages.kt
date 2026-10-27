@@ -69,6 +69,8 @@ import com.mie.kreaworkbench.data.discovery.LanScanner
 import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
 import com.mie.kreaworkbench.data.net.needsLocalNetworkPermission
 import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
+import com.mie.kreaworkbench.data.ssh.SshErrorKind
+import com.mie.kreaworkbench.data.ssh.SshTunnel
 import com.mie.kreaworkbench.data.workflows.isTextToImageWorkflow
 import com.mie.kreaworkbench.data.workflows.outputKindOf
 import com.mie.kreaworkbench.ui.locale.AppLocale
@@ -155,6 +157,8 @@ fun ConnectionPage(
     onBack: () -> Unit,
     autoScan: LanHit.Kind? = null,
     onAutoScanConsumed: () -> Unit = {},
+    /** "Go generate" exit once the tunnel is up (AppNav wires it to close this page and switch tabs). */
+    onDone: () -> Unit = onBack,
     vm: AppSettingsModel = viewModel(),
 ) {
     val s by vm.settings.collectAsState()
@@ -202,7 +206,7 @@ fun ConnectionPage(
         val id = s.currentWorkflow
         textToImage = withContext(Dispatchers.IO) { currentWorkflowIsTextToImage(app, id) }
     }
-    val showGacha = s.advGacha && textToImage
+    val showGacha = s.advGacha && textToImage && !(s.ssh.enabled && s.ssh.gachaForward)
     var confirmDelete by remember { mutableStateOf<String?>(null) }
     // r31：连接不上时任务会卡在提交/排队里，给一个「全部收掉」的出口
     var forceCancelAsk by remember { mutableStateOf(false) }
@@ -227,9 +231,32 @@ fun ConnectionPage(
                 .padding(padding)
                 .padding(horizontal = 12.dp),
         ) {
+            // -- connection mode (v0.5.2: direct URL / SSH tunnel) --
+            GlassCard {
+                Text(stringResource(R.string.ssh_mode), fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    listOf(
+                        false to stringResource(R.string.ssh_mode_direct),
+                        true to stringResource(R.string.ssh_mode_tunnel),
+                    ).forEach { (tunnelMode, label) ->
+                        FilterChip(
+                            selected = s.ssh.enabled == tunnelMode,
+                            onClick = { vm.setSshMode(tunnelMode) },
+                            label = { Text(label) },
+                            modifier = Modifier.padding(end = 8.dp),
+                            colors = glassChipColors(),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+
             // —— 当前连接 ——
             GlassCard {
-                if (!expanded) {
+                if (s.ssh.enabled) {
+                    SshTunnelFields(vm, onDone = onDone)
+                } else if (!expanded) {
                     val serverTitle = vm.name.value.ifBlank { hostPort(vm.url.value) }
                         .ifBlank { stringResource(R.string.settings_current_server) }
                     val serverStatus = if (vm.serverLatency.value >= 0 && vm.serverVersion.value.isNotBlank()) {
@@ -492,6 +519,271 @@ fun ConnectionPage(
 
     // r41：局域网权限的说明弹窗与被拒弹窗（页面末尾放一次）
     guard.Dialogs()
+}
+
+/**
+ * The SSH tunnel form (v0.5.2).
+ *
+ * It opens inside "the machine you connect to": SSH target + auth method -> remote ComfyUI
+ * address -> (optional) forward the gacha port as well. Typing persists nothing and triggers no reconnect; writes happen on focus loss or Connect.
+ * The status row reads the tunnel's own StateFlow, so rebuilds (auto-reconnect after a network change) show truthfully.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SshTunnelFields(vm: AppSettingsModel, onDone: () -> Unit) {
+    val st by vm.tunnel.collectAsState()
+    // Collapse to a one-line summary once connected (same convention as "collapse when the test passes"
+    // in direct mode). Without it the user sits on a full form after Connect and cannot tell it is done or what comes next - exactly where testing said the flow broke.
+    var editing by remember { mutableStateOf(false) }
+    if (st.phase == SshTunnel.Phase.UP && !editing) {
+        SshConnectedRow(
+            target = st.target,
+            detail = st.detail,
+            gachaUrl = st.gachaUrl,
+            onEdit = { editing = true },
+            onDisconnect = { vm.sshDisconnect() },
+            onDone = onDone,
+        )
+        return
+    }
+    Text(stringResource(R.string.ssh_section), fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(4.dp))
+    Text(stringResource(R.string.ssh_desc), fontSize = 13.sp, color = ImmersiveInkMuted)
+    Spacer(Modifier.height(10.dp))
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = vm.sshHost.value,
+            onValueChange = { vm.sshHost.value = it },
+            modifier = Modifier.weight(1f).onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_host), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            placeholder = { Text(stringResource(R.string.ssh_host_hint)) },
+            singleLine = true,
+            colors = glassTextFieldColors(),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(
+            value = vm.sshPort.value,
+            onValueChange = { raw -> vm.sshPort.value = raw.filter { it.isDigit() }.take(5) },
+            modifier = Modifier.width(96.dp).onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_port), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            colors = glassTextFieldColors(),
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = vm.sshUser.value,
+        onValueChange = { vm.sshUser.value = it },
+        modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+        label = { Text(stringResource(R.string.ssh_user)) },
+        singleLine = true,
+        colors = glassTextFieldColors(),
+    )
+    Spacer(Modifier.height(10.dp))
+
+    // Auth method: private key (optional passphrase) or password. Both work; making the user say
+    // which one keeps the library from silently falling back and reporting a cause that does not match.
+    Row {
+        FilterChip(
+            selected = vm.sshKeyAuth.value,
+            onClick = { vm.sshKeyAuth.value = true; vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_auth_key)) },
+            modifier = Modifier.padding(end = 8.dp),
+            colors = glassChipColors(),
+        )
+        FilterChip(
+            selected = !vm.sshKeyAuth.value,
+            onClick = { vm.sshKeyAuth.value = false; vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_auth_password)) },
+            colors = glassChipColors(),
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    if (vm.sshKeyAuth.value) {
+        OutlinedTextField(
+            value = vm.sshKey.value,
+            onValueChange = { vm.sshKey.value = it },
+            modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_private_key)) },
+            placeholder = { Text(stringResource(R.string.ssh_private_key_hint), fontSize = 13.sp) },
+            minLines = 3,
+            maxLines = 6,
+            colors = glassTextFieldColors(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = vm.sshKeyPass.value,
+                onValueChange = { vm.sshKeyPass.value = it },
+                modifier = Modifier.weight(1f).onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+                label = { Text(stringResource(R.string.ssh_key_passphrase), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                singleLine = true,
+                visualTransformation = if (vm.sshShowKeyPass.value) VisualTransformation.None else PasswordVisualTransformation(),
+                colors = glassTextFieldColors(),
+                trailingIcon = {
+                    IconButton(onClick = { vm.sshShowKeyPass.value = !vm.sshShowKeyPass.value }) {
+                        Icon(
+                            if (vm.sshShowKeyPass.value) Lucide.EyeOff else Lucide.Eye,
+                            contentDescription = stringResource(if (vm.sshShowKeyPass.value) R.string.hide_password else R.string.show_password),
+                        )
+                    }
+                },
+            )
+        }
+    } else {
+        OutlinedTextField(
+            value = vm.sshPassword.value,
+            onValueChange = { vm.sshPassword.value = it },
+            modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_password)) },
+            singleLine = true,
+            visualTransformation = if (vm.sshShowPassword.value) VisualTransformation.None else PasswordVisualTransformation(),
+            colors = glassTextFieldColors(),
+            trailingIcon = {
+                IconButton(onClick = { vm.sshShowPassword.value = !vm.sshShowPassword.value }) {
+                    Icon(
+                        if (vm.sshShowPassword.value) Lucide.EyeOff else Lucide.Eye,
+                        contentDescription = stringResource(if (vm.sshShowPassword.value) R.string.hide_password else R.string.show_password),
+                    )
+                }
+            },
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+
+    // Remote address: ComfyUI as seen from the SSH host. Same machine means 127.0.0.1:8188.
+    Text(stringResource(R.string.ssh_remote), fontSize = 13.sp, color = ImmersiveInkMuted)
+    Spacer(Modifier.height(6.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = vm.sshRemoteHost.value,
+            onValueChange = { vm.sshRemoteHost.value = it },
+            modifier = Modifier.weight(1f).onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            placeholder = { Text(stringResource(R.string.ssh_remote_hint)) },
+            singleLine = true,
+            colors = glassTextFieldColors(),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(
+            value = vm.sshRemotePort.value,
+            onValueChange = { raw -> vm.sshRemotePort.value = raw.filter { it.isDigit() }.take(5) },
+            modifier = Modifier.width(96.dp).onFocusChanged { if (!it.isFocused) vm.sshFormChanged() },
+            label = { Text(stringResource(R.string.ssh_port), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            colors = glassTextFieldColors(),
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            stringResource(R.string.ssh_gacha_forward, com.mie.kreaworkbench.data.settings.SshConfig.DEFAULT_GACHA_PORT),
+            fontSize = 14.sp,
+            color = ImmersiveInk,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(
+            checked = vm.sshGacha.value,
+            onCheckedChange = { vm.sshGacha.value = it; vm.sshFormChanged() },
+            colors = glassSwitchColors(),
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+
+    // Status row: connecting / connected (local address + remote ComfyUI version) / failure reason
+    val statusText = when (st.phase) {
+        com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.UP -> st.detail
+        com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.CONNECTING -> stringResource(R.string.ssh_connecting)
+        com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.FAILED -> st.error
+        com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.IDLE -> stringResource(R.string.ssh_not_connected)
+    }
+    Text(
+        statusText,
+        fontSize = 13.sp,
+        color = if (st.phase == com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.FAILED) GlassDanger else ImmersiveInkMuted,
+    )
+    if (st.phase == com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.UP && st.gachaUrl.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(hostPort(st.gachaUrl), fontSize = 13.sp, color = ImmersiveInkMuted)
+    }
+    if (st.errorKind == SshErrorKind.HOST_KEY_CHANGED) {
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = { vm.forgetSshHost() }) {
+            Text(stringResource(R.string.ssh_forget_host), color = GlassDanger, fontSize = 13.sp)
+        }
+    }
+    if (vm.sshMessage.value.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(vm.sshMessage.value, color = ImmersiveInkMuted, fontSize = 13.sp)
+    }
+    Spacer(Modifier.height(12.dp))
+
+    val connecting = st.phase == com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.CONNECTING || vm.sshBusy.value
+    PrimaryButton(
+        if (connecting) stringResource(R.string.ssh_connecting_btn) else stringResource(R.string.ssh_connect),
+        enabled = !connecting,
+    ) { vm.sshConnect { editing = false } }
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(
+        onClick = { vm.sshDisconnect() },
+        enabled = st.phase != com.mie.kreaworkbench.data.ssh.SshTunnel.Phase.IDLE,
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = ImmersiveInk),
+        border = BorderStroke(1.dp, ImmersiveHairline),
+    ) {
+        Text(stringResource(R.string.ssh_disconnect))
+    }
+}
+
+/**
+ * Collapsed state after the tunnel connects.
+ *
+ * Like direct mode it keeps a one-line summary: what you are connected to, the local address and the remote ComfyUI version.
+ * The primary button is the point - "Go generate" closes this page and switches to the generate tab; without it there is no next step here.
+ */
+@Composable
+private fun SshConnectedRow(
+    target: String,
+    detail: String,
+    gachaUrl: String,
+    onEdit: () -> Unit,
+    onDisconnect: () -> Unit,
+    onDone: () -> Unit,
+) {
+    Text(target.ifBlank { stringResource(R.string.ssh_section) }, fontWeight = FontWeight.Bold, color = ImmersiveInk)
+    Spacer(Modifier.height(4.dp))
+    Text(detail, fontSize = 13.sp, color = ImmersiveInkMuted)
+    if (gachaUrl.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(stringResource(R.string.ssh_gacha_via, hostPort(gachaUrl)), fontSize = 13.sp, color = ImmersiveInkMuted)
+    }
+    Spacer(Modifier.height(12.dp))
+    PrimaryButton(stringResource(R.string.ssh_go_generate)) { onDone() }
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = onEdit,
+            modifier = Modifier.weight(1f).height(48.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = ImmersiveInk),
+            border = BorderStroke(1.dp, ImmersiveHairline),
+        ) {
+            Text(stringResource(R.string.action_edit))
+        }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(
+            onClick = onDisconnect,
+            modifier = Modifier.weight(1f).height(48.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = ImmersiveInk),
+            border = BorderStroke(1.dp, ImmersiveHairline),
+        ) {
+            Text(stringResource(R.string.ssh_disconnect))
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(stringResource(R.string.ssh_ready_hint), fontSize = 12.sp, color = ImmersiveInkMuted)
 }
 
 @Composable
