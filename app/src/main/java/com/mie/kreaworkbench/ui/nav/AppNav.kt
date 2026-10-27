@@ -499,6 +499,12 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
             onBack = { nav.pop() },
             autoScan = nav.pendingAutoScan,
             onAutoScanConsumed = { nav.pendingAutoScan = null },
+            // "Go generate" after the tunnel connects: close this page and switch to the generate tab.
+            // When onboarding sits on top (entered from its first step), closing lands back on it with step two unlocked - both entries get a clear next step.
+            onDone = {
+                nav.pop()
+                nav.tab = AppTab.T2I
+            },
         )
         Scene.SettingsBackground -> BackgroundPage(onBack = { nav.pop() })
         Scene.SettingsAppearance -> AppearancePage(onBack = { nav.pop() })

@@ -65,6 +65,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
+        <!-- v0.5.2: process anchor for the SSH tunnel, foreground only while the tunnel is up -->
+        <service
+            android:name=".service.SshTunnelService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

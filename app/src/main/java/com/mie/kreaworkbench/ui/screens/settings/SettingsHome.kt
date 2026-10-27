@@ -92,7 +92,12 @@ fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel(), nav: N
 
     // 各入口的一行状态
     val notSet = stringResource(R.string.status_not_set)
-    val serverStatus = hostPort(s.serverUrl).ifBlank { notSet }
+    // In tunnel mode this row shows the tunnel target (user@host), otherwise the URL - either way it is obvious what you are connected to
+    val serverStatus = if (s.ssh.enabled) {
+        s.ssh.host.ifBlank { notSet }
+    } else {
+        hostPort(s.serverUrl).ifBlank { notSet }
+    }
     val themeLabel = when (s.themeMode) {
         "light" -> stringResource(R.string.theme_light)
         "dark" -> stringResource(R.string.theme_dark)
@@ -134,7 +139,7 @@ fun SettingsHome(onAbout: () -> Unit, vm: AppSettingsModel = viewModel(), nav: N
                         trailing = { Chevron() },
                     )
                     // r38：服务器未设置时（与该行显示「未设置」同一判定），行下小字快速开始入口；配好后消失。
-                    if (s.serverUrl.isBlank()) {
+                    if (!s.hasServer) {
                         Text(
                             stringResource(R.string.settings_quick_start_hint),
                             fontSize = 13.sp,

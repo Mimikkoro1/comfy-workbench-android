@@ -15,10 +15,13 @@ import com.mie.kreaworkbench.data.gacha.AdvGachaClient
 import com.mie.kreaworkbench.data.db.GalleryDb
 import com.mie.kreaworkbench.data.library.PromptLibraryRepo
 import com.mie.kreaworkbench.data.settings.SettingsStore
+import com.mie.kreaworkbench.data.ssh.SshTunnel
 import com.mie.kreaworkbench.data.workflows.WorkflowStore
 import com.mie.kreaworkbench.service.GenerationEngine
 import com.mie.kreaworkbench.service.GenerationService
+import com.mie.kreaworkbench.service.SshTunnelAnchor
 import com.mie.kreaworkbench.service.ensureNotifyChannels
+import com.mie.kreaworkbench.service.ensureSshChannel
 import com.mie.kreaworkbench.service.scheduleResumeWork
 import com.mie.kreaworkbench.ui.locale.AppLocale
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +57,9 @@ class KreaApp : Application(), ImageLoaderFactory {
         super.onCreate()
         container = AppContainer(this)
         ensureNotifyChannels(this)
+        // v0.5.2: bring up the SSH tunnel channel and wire tunnel state to the foreground anchor
+        ensureSshChannel(this)
+        SshTunnelAnchor.attach(this)
         container.engine.watchNetwork()
         container.auth.start()
         scheduleResumeWork(this)
@@ -107,6 +113,8 @@ class AppContainer(context: Context) {
     val library = PromptLibraryRepo(app)
     val workflowStore = WorkflowStore(app)
     val transfer = Transfer(settings, auth.interceptor)
+    /** Holder of the SSH tunnel (v0.5.2): a process-wide singleton that outlives any screen. */
+    val tunnel = SshTunnel(app)
     val cache = CacheManager(app, db, settings)
     val engine = GenerationEngine(app, db, api, transfer, settings, cache)
 }

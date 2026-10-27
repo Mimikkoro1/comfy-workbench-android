@@ -19,6 +19,7 @@ import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.ui.locale.workflowLabelStr
 import com.mie.kreaworkbench.data.api.ServerKind
 import com.mie.kreaworkbench.data.api.normalizeServerUrl
+import com.mie.kreaworkbench.data.api.gachaBase
 import com.mie.kreaworkbench.data.api.trimBase
 import com.mie.kreaworkbench.data.buildCustomBody
 import com.mie.kreaworkbench.data.gacha.GACHA_MAX_COUNT
@@ -88,10 +89,23 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     var settingsLoaded by mutableStateOf(false)
         private set
 
+    /**
+     * The gacha server's effective address (v0.5.2): the tunnel's local port when SSH gacha forwarding is on.
+     * The catalog has to be reloaded whenever the tunnel comes up or goes down, so this follows both settings and tunnel state.
+     */
+    var gachaBase by mutableStateOf("")
+        private set
+
     init {
         viewModelScope.launch {
             c.settings.flow.first()
             settingsLoaded = true
+        }
+        viewModelScope.launch {
+            c.settings.flow.collect { gachaBase = it.gachaBase() }
+        }
+        viewModelScope.launch {
+            c.tunnel.state.collect { gachaBase = c.settings.current().gachaBase() }
         }
     }
 
@@ -172,7 +186,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     fun hidePromptOn(saved: Boolean): Boolean = hidePromptPick ?: saved
 
     fun gachaRequest(s: UserSettings, count: Int) = GachaRequest(
-        base = s.advGachaUrl.trim(),
+        base = s.gachaBase(),
         mode = gachaModePick ?: s.advGachaMode.ifBlank { "wallpaper" },
         count = count,
         master = gachaMasterPick ?: s.advGachaMaster,
@@ -629,7 +643,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             delay(1_500)
             if (boundId != target) return@launch
             try {
-                if (c.settings.current().serverUrl.isBlank()) return@launch
+                if (!c.settings.current().hasServer) return@launch
                 loadChoices()
             } catch (e: CancellationException) {
                 throw e

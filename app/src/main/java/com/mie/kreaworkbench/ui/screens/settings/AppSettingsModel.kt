@@ -29,7 +29,10 @@ import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
 import com.mie.kreaworkbench.data.net.needsLocalNetworkPermission
 import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
 import com.mie.kreaworkbench.data.settings.ServerHistoryEntry
+import com.mie.kreaworkbench.data.settings.SshAuthMode
+import com.mie.kreaworkbench.data.settings.SshConfig
 import com.mie.kreaworkbench.data.settings.UserSettings
+import com.mie.kreaworkbench.data.ssh.SshTunnel
 import com.mie.kreaworkbench.ui.locale.str
 import com.mie.kreaworkbench.ui.theme.ThemeKind
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +79,29 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     var usage = mutableStateOf(0L)
     /** usage 是否已算出（设置首页「存储与缓存」状态行算出前不显示）。 */
     var usageLoaded = mutableStateOf(false)
+
+    // ---- v0.5.2 SSH forwarding: form fields (persisted via settings.ssh, credentials encrypted) and tunnel state ----
+
+    /** Tunnel state flow the UI subscribes to (connecting / connected / failed + local address + error text). */
+    val tunnel = c.tunnel.state
+
+    var sshHost = mutableStateOf("")
+    var sshPort = mutableStateOf(SshConfig.DEFAULT_SSH_PORT.toString())
+    var sshUser = mutableStateOf("")
+    /** true = key sign-in, false = password sign-in. */
+    var sshKeyAuth = mutableStateOf(true)
+    var sshKey = mutableStateOf("")
+    var sshKeyPass = mutableStateOf("")
+    var sshPassword = mutableStateOf("")
+    var sshShowKeyPass = mutableStateOf(false)
+    var sshShowPassword = mutableStateOf(false)
+    var sshRemoteHost = mutableStateOf(SshConfig.DEFAULT_REMOTE_HOST)
+    var sshRemotePort = mutableStateOf(SshConfig.DEFAULT_COMFY_PORT.toString())
+    var sshGacha = mutableStateOf(false)
+    var sshBusy = mutableStateOf(false)
+    /** Result/error message for the tunnel row. */
+    var sshMessage = mutableStateOf("")
+
     private var seeded = false
 
     init {
@@ -87,6 +113,17 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
                 pass.value = s.serverPass
                 gachaUrl.value = s.advGachaUrl
                 name.value = s.serverHistory.firstOrNull { it.url.trimEnd('/') == s.serverUrl.trimEnd('/') }?.name.orEmpty()
+                // Fill the SSH form (with decrypted credentials: editing the address must not require pasting the key again)
+                sshHost.value = s.ssh.host
+                sshPort.value = s.ssh.port.toString()
+                sshUser.value = s.ssh.user
+                sshKeyAuth.value = s.ssh.authMode == SshAuthMode.KEY
+                sshKey.value = s.ssh.privateKey
+                sshKeyPass.value = s.ssh.keyPassphrase
+                sshPassword.value = s.ssh.password
+                sshRemoteHost.value = s.ssh.remoteHost
+                sshRemotePort.value = s.ssh.remotePort.toString()
+                sshGacha.value = s.ssh.gachaForward
                 seeded = true
             }
             usage.value = withContext(Dispatchers.IO) { c.cache.usedBytes() }
@@ -435,6 +472,83 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
                 busy.value = false
             }
         }
+    }
+
+    // ---- v0.5.2 SSH forwarding: persist form / connect / disconnect / forget host key ----
+
+    /** Form -> settings.ssh (credentials encrypted). Must run before switching modes or connecting. */
+    private suspend fun saveSshNow() = c.settings.update { cur ->
+        cur.copy(
+            ssh = cur.ssh.copy(
+                host = sshHost.value.trim(),
+                port = sshPort.value.trim().toIntOrNull()?.coerceIn(1, 65535) ?: SshConfig.DEFAULT_SSH_PORT,
+                user = sshUser.value.trim(),
+                authMode = if (sshKeyAuth.value) SshAuthMode.KEY else SshAuthMode.PASSWORD,
+                privateKey = sshKey.value,
+                keyPassphrase = sshKeyPass.value,
+                password = sshPassword.value,
+                remoteHost = sshRemoteHost.value.trim().ifBlank { SshConfig.DEFAULT_REMOTE_HOST },
+                remotePort = sshRemotePort.value.trim().toIntOrNull()?.coerceIn(1, 65535)
+                    ?: SshConfig.DEFAULT_COMFY_PORT,
+                gachaForward = sshGacha.value,
+            ),
+        )
+    }
+
+    /** Persist form edits (on focus loss / toggles). A changed address rebuilds the tunnel on the next connect. */
+    fun sshFormChanged() = viewModelScope.launch { saveSshNow() }
+
+    /** Switch connection mode: direct <-> SSH tunnel. Switching back to direct tears the tunnel down at once, never leaving a hidden SSH connection behind. */
+    fun setSshMode(tunnelMode: Boolean) = viewModelScope.launch {
+        if (tunnelMode) saveSshNow()
+        c.settings.update { it.copy(ssh = it.ssh.copy(enabled = tunnelMode)) }
+        if (!tunnelMode) {
+            c.tunnel.stop()
+            sshMessage.value = ""
+        }
+    }
+
+    /** Tap Connect: persist first, then open the tunnel (including a real ComfyUI probe through the forward). */
+    fun sshConnect(onSuccess: () -> Unit = {}) = viewModelScope.launch {
+        val app = getApplication<Application>()
+        saveSshNow()
+        val cfg = c.settings.current().ssh
+        if (cfg.host.isBlank()) {
+            sshMessage.value = app.str(R.string.ssh_err_no_host)
+            return@launch
+        }
+        if (cfg.user.isBlank()) {
+            sshMessage.value = app.str(R.string.ssh_err_no_user)
+            return@launch
+        }
+        sshBusy.value = true
+        sshMessage.value = ""
+        try {
+            val st = c.tunnel.connect(cfg)
+            sshMessage.value = if (st.phase == SshTunnel.Phase.UP) st.detail else st.error
+            if (st.phase == SshTunnel.Phase.UP) onSuccess()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            sshMessage.value = e.message ?: e.javaClass.simpleName
+        } finally {
+            sshBusy.value = false
+        }
+    }
+
+    /** Disconnect: release the SSH session too, never leaving a half-dead connection. */
+    fun sshDisconnect() {
+        c.tunnel.stop()
+        sshMessage.value = ""
+    }
+
+    /** Recovery after a changed host key (or a new machine): forget the record so the next connect trusts it again. */
+    fun forgetSshHost() {
+        val app = getApplication<Application>()
+        val host = sshHost.value.trim()
+        if (host.isBlank()) return
+        c.tunnel.forgetHostKey(host)
+        sshMessage.value = app.str(R.string.ssh_forget_host_done, host)
     }
 
     fun theme(mode: String) = viewModelScope.launch { c.settings.update { it.copy(themeMode = mode) } }

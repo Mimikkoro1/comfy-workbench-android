@@ -36,6 +36,8 @@ data class UserSettings(
     val serverPass: String = "",
     /** 已保存的服务器配置列表（每套带自己的显示名与凭据），按 url 去重；当前连接仍看 serverUrl。 */
     val serverHistory: List<ServerHistoryEntry> = emptyList(),
+    /** SSH forwarding config (v0.5.2). With ssh.enabled the connection goes through the tunnel and serverUrl is ignored. */
+    val ssh: SshConfig = SshConfig(),
     val themeMode: String = "system",
     val notifyEnabled: Boolean = true,
     val cacheLimitGb: Int = 10,
@@ -82,7 +84,13 @@ data class UserSettings(
     val advGachaHistory: List<String> = emptyList(),
     /** 高级抽卡引导点过「不再提示」。 */
     val advGachaGuideOff: Boolean = false,
-)
+) {
+    /**
+     * Whether a connection is configured: either a direct URL or an SSH tunnel (v0.5.2).
+     * Empty-state checks, the first onboarding step and the quick-start hint all read this, so nobody re-implements `serverUrl.isBlank()`.
+     */
+    val hasServer: Boolean get() = serverUrl.isNotBlank() || ssh.configured
+}
 
 class SettingsStore(private val context: Context) {
     private val gate = Mutex()
@@ -90,6 +98,11 @@ class SettingsStore(private val context: Context) {
     private val kUser = stringPreferencesKey("server_user")
     private val kPass = stringPreferencesKey("server_pass")
     private val kHistory = stringPreferencesKey("server_history")
+    // v0.5.2 SSH tunnel: non-sensitive fields go into one JSON entry, credentials (key / passphrase / password) are encrypted separately
+    private val kSshJson = stringPreferencesKey("ssh_config")
+    private val kSshKey = stringPreferencesKey("ssh_private_key")
+    private val kSshKeyPass = stringPreferencesKey("ssh_key_passphrase")
+    private val kSshPass = stringPreferencesKey("ssh_password")
     private val kComfyClient = stringPreferencesKey("comfy_client_id")
     private val kTheme = stringPreferencesKey("theme")
     private val kNotify = booleanPreferencesKey("notify")
@@ -156,6 +169,12 @@ class SettingsStore(private val context: Context) {
             serverUser = p[kUser] ?: "",
             serverPass = ServerCrypto.decrypt(p[kPass] ?: ""),
             serverHistory = parseHistory(p[kHistory].orEmpty()),
+            ssh = SshConfig.parse(
+                raw = p[kSshJson].orEmpty(),
+                privateKey = ServerCrypto.decrypt(p[kSshKey].orEmpty()),
+                keyPassphrase = ServerCrypto.decrypt(p[kSshKeyPass].orEmpty()),
+                password = ServerCrypto.decrypt(p[kSshPass].orEmpty()),
+            ),
             themeMode = p[kTheme] ?: "system",
             notifyEnabled = p[kNotify] ?: true,
             cacheLimitGb = p[kCache] ?: 10,
@@ -322,6 +341,10 @@ class SettingsStore(private val context: Context) {
             p[kUrl] = next.serverUrl
             p[kUser] = next.serverUser
             p[kPass] = ServerCrypto.encrypt(next.serverPass)
+            p[kSshJson] = SshConfig.toJson(next.ssh)
+            p[kSshKey] = ServerCrypto.encrypt(next.ssh.privateKey)
+            p[kSshKeyPass] = ServerCrypto.encrypt(next.ssh.keyPassphrase)
+            p[kSshPass] = ServerCrypto.encrypt(next.ssh.password)
             p[kTheme] = next.themeMode
             p[kNotify] = next.notifyEnabled
             p[kCache] = next.cacheLimitGb

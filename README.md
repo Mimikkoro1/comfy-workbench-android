@@ -95,6 +95,11 @@
 
 默认面向局域网，通信是 HTTP 明文。人不在家时，选一种方式把家里的 ComfyUI 露给手机：
 
+- **SSH 转发（推荐）**：设置 › ComfyUI 服务器 › 连接方式选「SSH 隧道」，填 SSH 主机、用户名，
+  粘贴私钥（可带口令）或填密码，远端地址默认 `127.0.0.1:8188`。App 自己用 SSH 连到那台机器，
+  把它的 ComfyUI 端口转发到手机本地，之后所有请求走 `127.0.0.1`。**不用给 ComfyUI 加 `--listen 0.0.0.0`，
+  也不用往公网开端口或做内网穿透**，家里那台机器只要开着 sshd 就行。抽卡服务（默认 8787）可以在同一面板里勾选一起转发。
+  隧道活着时通知栏有一条常驻通知（App 退到后台也能不断）；换网或掉线后下一次请求会自动重连。
 - **蒲公英组网**（中国大陆最省事）：手机和家里电脑加入同一网络，填家里电脑的虚拟 IP，如 `http://<虚拟 IP>:8188`
 - **公网 IPv6 + DDNS**：域名指向家里电脑的 IPv6，再用 Caddy / Nginx 反代并开 Basic Auth（建议 HTTPS）。防火墙只放行反代端口，不要直接开放 8188。密码加密保存在手机本地
 - **Tailscale**：填 Tailscale IP。海外稳，中国大陆可能不稳
@@ -103,6 +108,9 @@
 公网不要裸奔 8188。不可信网络不要走明文，走 VPN 或隧道。
 
 家里一个地址、外面一个地址的话，两个都存成服务器，出门前在地址栏下拉里切一下就行。
+
+私钥、私钥口令、SSH 密码都只加密存在手机本地（Android Keystore），不会上传。第一次连接会记住那台机器的主机密钥，
+之后密钥变了会拒绝连接并提示（确认服务器没问题后可在同一页面「忘掉已记住的主机密钥」）。
 
 ## 自定义工作流（进阶）
 
@@ -211,7 +219,9 @@ Tip: the UI has no extra buttons; secondary actions are on **long-press**. Long-
 
 Your own workflow (advanced): ComfyUI web UI, Workflow menu (File in newer versions) → Export (API), then import it under Workflows. A regular saved workflow is rejected with a hint to re-export. You choose which parameters to show and can edit that later; built-in templates can be "Copied & customized".
 
-Remote access (Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from home.
+Remote access (SSH forwarding, Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from home.
+
+**SSH forwarding (recommended)** — Settings › ComfyUI server › Connection › "SSH tunnel": enter the SSH host and username, paste a private key (optionally with a passphrase) or the password, and leave the remote address at `127.0.0.1:8188`. The app opens the SSH connection itself and forwards that machine's ComfyUI port to the phone's loopback, so ComfyUI can keep listening on `127.0.0.1` — no `--listen 0.0.0.0`, no public port, no port-forwarding service. The gacha server (8787) can be forwarded on the same connection. A persistent notification keeps the tunnel alive in the background, and the next request rebuilds it after a network change. Keys, passphrases and SSH passwords are encrypted on the phone only (Android Keystore); the host key is remembered on first use and a changed key is refused with a hint on how to forget it.
 
 **New in v0.5.0** (older releases: [Releases](https://github.com/Mimikkoro1/comfy-workbench-android/releases))
 

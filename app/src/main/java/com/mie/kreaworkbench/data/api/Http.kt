@@ -7,6 +7,7 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.data.net.LOCAL_NETWORK_ENFORCED_SDK
 import com.mie.kreaworkbench.data.net.isLocalNetworkGranted
 import com.mie.kreaworkbench.data.settings.SettingsStore
+import com.mie.kreaworkbench.data.settings.UserSettings
 import com.mie.kreaworkbench.ui.locale.localized
 import com.mie.kreaworkbench.ui.locale.str
 import kotlinx.coroutines.delay
@@ -72,11 +73,40 @@ fun trimBase(url: String): String {
     return if (withScheme.toHttpUrlOrNull() != null) withScheme else ""
 }
 
-/** 配置的 ComfyUI 地址；空 = 未配置。 */
+/**
+ * Configured ComfyUI address; empty = not configured.
+ *
+ * In SSH tunnel mode (v0.5.2) this returns the **tunnel's local address**
+ * `http://127.0.0.1:<port>`: HTTP, WebSocket, uploads and downloads all resolve their
+ * address through this function, so the tunnel hides behind address resolution and no
+ * caller changes. While the tunnel is down it is opened here on demand, and only a
+ * failure to open it raises an error.
+ */
 suspend fun SettingsStore.baseUrl(): String {
-    val u = trimBase(current().serverUrl)
+    val s = current()
+    if (s.ssh.enabled) {
+        val url = KreaApp.instance.container.tunnel.ensureUp(s.ssh)
+        if (url.isNotBlank()) return url
+        val st = KreaApp.instance.container.tunnel.state.value
+        throw ApiException(
+            st.error.ifBlank { KreaApp.instance.str(R.string.ssh_err_not_connected) },
+            network = true,
+            unreachable = true,
+        )
+    }
+    val u = trimBase(s.serverUrl)
     if (u.isBlank()) throw ApiException(KreaApp.instance.str(R.string.ping_need_server))
     return u
+}
+
+/** Advanced gacha address: the tunnel's local port when SSH gacha forwarding is on, otherwise the configured direct URL. */
+fun UserSettings.gachaBase(): String {
+    if (!ssh.enabled || !ssh.gachaForward) return advGachaUrl.trim()
+    // Fall back to the direct URL while the tunnel is down, so a gacha failure still names
+    // the address the user typed
+    return runCatching { KreaApp.instance.container.tunnel.state.value.gachaUrl }
+        .getOrDefault("")
+        .ifBlank { advGachaUrl.trim() }
 }
 
 /** 网络请求重试的退避表（毫秒）；第 1 次尝试不等。Http.callJson 与 Transfer 共用（Transfer 在第 8 项接入）。 */
