@@ -16,20 +16,14 @@
 
 人不在电脑前，也能用同一套已经调好的工作流出图、图生图、图生视频、反推提示词。
 
-**0.5.0 是第一个稳定版**：直连 ComfyUI 的主要功能已经定型，今后以修大家反馈的问题为主，不再频繁发版。
+**最新版是 v0.6.0**（相对第一个稳定版 v0.5.0 的体验更新）。更早版本见 [Releases](https://github.com/Mimikkoro1/comfy-workbench-android/releases)。
 
-## v0.5.0 新在哪
+## v0.6.0 新在哪
 
-更早的版本见 [Releases](https://github.com/Mimikkoro1/comfy-workbench-android/releases)。
-
-- **两种界面风格**：「设置 › 外观」新增「界面风格」——「毛玻璃」（默认，老用户升级后不变）和「经典」（实心素色面，更清爽）。经典风格可选浅色 / 深色 / 跟随系统，Android 12+ 另有动态取色和纯黑深色
-- **应用内更新**：检查更新国内优先走 Gitee，失败自动换 GitHub；更新说明按界面语言显示；新版本可直接在应用内下载并安装
-- **连接电脑更省心**：适配 Android 17 的局域网权限；自动查找只走 WiFi，开着 VPN 也能找到电脑；服务器地址少写协议、端口、斜杠也能连；连接失败会说清卡在哪一步，可复制详细信息；设置首页的服务器行新增连接状态点（绿 / 红 / 灰）
-- **队列更可靠**：「强制结束」同时清空电脑端 ComfyUI 的队列；排队中点一下即可取消，排队太久会给出「强制清空队列」出口；启动时与服务器核对队列和历史，不再有「一直排队中」的幽灵任务
-- **报错看得懂**：缺模型等常见错误先给一句人话，ComfyUI 原文折叠在「展开原文」里；生成失败显示醒目的错误条，点开可看节点 / 异常 / 调用栈并一键复制；模型页缺失的模型整段标红
-- **导入工作流更准**：收图优先 SaveImage，不再把 PreviewImage 的临时图当结果；导入 ResolutionSelector 时补上宽高比下拉；采样参数（步数 / CFG / 采样器 / 调度器，含 KSamplerAdvanced 双采样）默认显示在「模型和采样」页；参数页的下拉选项缓存在本地，电脑关机也能先看到上次的选项
-- **更稳**：图片下载失败可点击重试；多个任务同时完成时各有各的通知；视频全屏或旋转后接着原位置播放；没网时不再把「已暂停」的任务拉起来空转；系统备份和换机迁移不再带走服务器地址和账号密码；后台更省电
-- **反馈入口**：设置首页新增「反馈与建议」（GitHub / Gitee），可一键复制诊断信息
+- **即时预览（默认关）**：生成页 → 更多设置里打开后，跑图过程中用 ComfyUI 预览帧盖在成品背景上；中间帧只留内存，不进图库。电脑端需 `--preview-method auto`（或能出预览帧的等价参数）
+- **液态玻璃**：沉浸界面换成更透的液态玻璃观感
+- **动画**：优化了页面切换等过渡动画
+- **刷新目录**：抽卡筛选里加了刷新按钮，可强制重拉服端目录
 
 ## 它做什么
 
@@ -174,6 +168,7 @@ gradlew.bat assembleRelease
 - 英文界面下，「模型和采样」页个别参数标签（如「采样 · steps」）仍是中文
 - 经典风格下，生成页的系统导航栏图标（返回 / 主页）压在壁纸上时可能看不清
 - 状态栏文字在个别壁纸和主题的组合下对比度偏低
+- 即时预览依赖电脑端预览帧；`--preview-method none` 时开关无效（属预期）
 
 遇到别的问题欢迎到「反馈与建议」里告诉我。
 
@@ -197,7 +192,7 @@ gradlew.bat assembleRelease
 
 It is not a node editor, and it does not replace the ComfyUI web UI. Graphs stay on the computer. The phone only runs them.
 
-**0.5.0 is the first stable release.** The core direct-to-ComfyUI experience has settled; from here on, updates will mostly follow your feedback rather than frequent releases.
+**Latest is v0.6.0** (a polish release on top of the first stable v0.5.0).
 
 **Quick start (same Wi-Fi, nothing else to install)**
 
@@ -213,16 +208,12 @@ Your own workflow (advanced): ComfyUI web UI, Workflow menu (File in newer versi
 
 Remote access (Pgyer, IPv6 + DDNS, Tailscale) is only for using it away from home.
 
-**New in v0.5.0** (older releases: [Releases](https://github.com/Mimikkoro1/comfy-workbench-android/releases))
+**New in v0.6.0** (older releases: [Releases](https://github.com/Mimikkoro1/comfy-workbench-android/releases))
 
-- **Two interface styles**: Settings › Appearance now has a "Style" option, "Glass" (the default; existing users stay on it after updating) and "Classic" (solid, plain surfaces). Classic supports Light / Dark / System, plus Dynamic color and True black on Android 12+
-- **In-app updates**: update checks try Gitee first in China and fall back to GitHub; release notes follow the app language; new versions download and install inside the app
-- **Smoother connection setup**: handles Android 17's local-network permission; auto-discovery scans over WiFi only and works with a VPN running; server addresses can omit the scheme, port or trailing slash; connection failures say which step failed and can be copied as diagnostics; the Settings home shows a server status dot (green / red / grey)
-- **A more reliable queue**: "Force stop" also clears the ComfyUI server's queue; tap a queued job to cancel it, and a "Force clear queue" exit appears when a job has waited too long; on launch the app reconciles with the server's queue and history, so no more ghost "queued" jobs
-- **Errors you can read**: common problems such as a missing model get a one-line explanation, with ComfyUI's original message under "Show original"; failed generations show a prominent error bar that opens to the node, exception and traceback and can be copied in one tap; missing models are highlighted on the Models page
-- **More accurate custom-workflow import**: results prefer SaveImage over PreviewImage temp files; imported ResolutionSelector nodes get an aspect-ratio dropdown; sampler parameters (steps / CFG / sampler / scheduler, including KSamplerAdvanced two-stage samplers) are shown by default on the Models page; dropdown options are cached locally so you still see the last choices when the PC is off
-- **Stability and polish**: failed image downloads can be retried with a tap; every finished job gets its own notification; video resumes where it was after fullscreen or rotation; no more paused jobs spinning up when offline; system backup and device transfer no longer carry the server address or credentials; lower background power use
-- **Feedback entry**: Settings home now has "Feedback & suggestions" (GitHub / Gitee) with one-tap diagnostics copy
+- **Live preview (off by default)**: turn it on under Generate → More settings; while a job is running, ComfyUI preview frames cover the finished-image backdrop (memory only, never the gallery). Your PC needs `--preview-method auto` (or equivalent)
+- **Liquid glass**: the immersive UI switches to a clearer liquid-glass look
+- **Animations**: smoother page transitions and related motion polish
+- **Catalog refresh**: the gacha filter sheet adds a refresh control to force-reload the server catalog
 
 **What it does and doesn't do**
 
@@ -274,6 +265,7 @@ More:
 - In the English UI a few parameter labels on the Models page (e.g. "采样 · steps") are still in Chinese
 - In Classic style the system navigation icons (back / home) can be hard to see over the wallpaper on the Generate page
 - Status-bar text contrast is low with some wallpaper and theme combinations
+- Live preview needs PC preview frames; with `--preview-method none` the toggle does nothing (expected)
 
 Build: JDK 17 + Android SDK, then `./gradlew assembleRelease`. Unit tests (plain JVM, no device): `./gradlew testDebugUnitTest`.
 
