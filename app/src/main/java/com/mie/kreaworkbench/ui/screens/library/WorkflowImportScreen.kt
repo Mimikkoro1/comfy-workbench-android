@@ -93,7 +93,7 @@ private fun GlassPrimaryButton(text: String, enabled: Boolean, onClick: () -> Un
             .height(56.dp)
             .alpha(if (enabled) 1f else 0.45f)
             .clip(shape)
-            .immersiveGlass(20.dp)
+            .immersiveGlass(20.dp, shape)
             .border(1.dp, ImmersiveHairline, shape)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,

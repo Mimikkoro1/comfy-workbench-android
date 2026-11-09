@@ -15,6 +15,7 @@ enum class AppearanceRow { STYLE, THEME, LANGUAGE, DYNAMIC, AMOLED, BLUR }
  *  - 经典：主题（浅/深/跟随）、动态取色（API 31+ 才有）、纯黑深色 —— 这三项只在经典下生效；
  *  - 毛玻璃：模糊效果 —— 只在毛玻璃下生效。
  * 隐藏的行不删存储值，切回来仍是原来的选择。
+ * r51：「即时预览」不再属于外观页，开关挪到生成页「更多设置」抽屉（存储键不变）。
  */
 fun appearanceRows(kind: ThemeKind, sdkInt: Int): List<AppearanceRow> = buildList {
     add(AppearanceRow.STYLE)

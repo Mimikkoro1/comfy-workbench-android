@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.data.api
 
+import android.graphics.Bitmap
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -55,6 +56,8 @@ data class RemoteJob(
     val error: String?,
     /** r42：ComfyUI execution_error 的详细报错（节点/异常/调用栈，可展开可复制）；没有为 null。 */
     val errorDetail: String? = null,
+    /** r50：正在跑的 prompt 的采样即时预览帧（内存引用，开关关时恒 null）；不落盘、不入库。 */
+    val preview: Bitmap? = null,
 )
 
 fun JSONArray.strings(): List<String> = buildList {

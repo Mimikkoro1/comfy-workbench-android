@@ -20,8 +20,8 @@ android {
         applicationId = "com.mie.kreaworkbench.direct"
         minSdk = 26
         targetSdk = 37
-        versionCode = 107
-        versionName = "0.5.0"
+        versionCode = 118
+        versionName = "0.6.0"
     }
 
     signingConfigs {
@@ -72,8 +72,8 @@ android {
 }
 
 base {
-    // round19：与发布仓统一（发布仓一直是 comfy-workbench）。
-    // 这样两个仓库的构建产物同名，归档时不用再改名，也少一个"两仓不一致"的点。
+    // round19：与发布仓统一（发布仓一直是 comfy-workbench）�?
+    // 这样两个仓库的构建产物同名，归档时不用再改名，也少一�?两仓不一�?的点�?
     archivesName.set("comfy-workbench")
 }
 
@@ -90,9 +90,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3:1.5.0-alpha09")
-    implementation("dev.chrisbanes.haze:haze:2.0.0")
-    implementation("dev.chrisbanes.haze:haze-blur:2.0.0")
-    implementation("dev.chrisbanes.haze:haze-blur-material3:2.0.0")
+    implementation("dev.chrisbanes.haze:haze:2.0.1")
+    // r53 Һ̬������Glass ������ core ͬ�汾��haze-blur ���� hazeGlass �л��Ƴ���
+    implementation("dev.chrisbanes.haze:haze-glass:2.0.1")
     implementation("com.composables:icons-lucide:1.1.0")
     implementation("io.github.dokar3:sonner:0.4.0")
     implementation("androidx.activity:activity-compose:1.10.1")

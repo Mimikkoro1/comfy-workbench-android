@@ -15,7 +15,7 @@ class LocalNetworkPermissionTest {
         assertTrue(isLocalNetworkHost("10.0.0.52"))
         assertTrue(isLocalNetworkHost("172.16.0.1"))
         assertTrue(isLocalNetworkHost("172.31.255.1"))
-        assertTrue(isLocalNetworkHost("192.168.1.100"))
+        assertTrue(isLocalNetworkHost("192.168.1.3"))
         assertTrue(isLocalNetworkHost("169.254.1.1"))
     }
 
@@ -49,7 +49,7 @@ class LocalNetworkPermissionTest {
     @Test
     fun extractsHostFromBareAndFullUrls() {
         assertTrue(urlTargetsLocalNetwork("10.0.0.52:8188"))
-        assertTrue(urlTargetsLocalNetwork("http://192.168.1.100:8188/"))
+        assertTrue(urlTargetsLocalNetwork("http://192.168.1.3:8188/"))
         // 大写协议 + IPv6 方括号
         assertTrue(urlTargetsLocalNetwork("HTTP://[fd00::1]:8188"))
     }

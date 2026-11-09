@@ -618,6 +618,8 @@ class ComfyApi(
 
         // 阶段文案：正在跑的 prompt 对应 executing 节点 → 「采样 1/2」「合成视频」
         val stage = runningPid?.let { sid -> stageLabels?.get(progress.currentNodeFor(sid)) } ?: ""
+        // r50：采样过程即时预览（开关关时 ComfyProgress 不解码，恒 null）
+        val preview = runningPid?.let { progress.previewFor(it) }
 
         val state = when {
             doneCount + failCount == n && failCount == 0 -> "success"
@@ -648,6 +650,7 @@ class ComfyApi(
             stage = stage,
             error = firstError,
             errorDetail = errorDetail,
+            preview = preview,
         )
     }
 

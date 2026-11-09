@@ -1,5 +1,7 @@
 package com.mie.kreaworkbench.data.comfy
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.mie.kreaworkbench.data.api.baseUrl
 import com.mie.kreaworkbench.data.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +16,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,7 +25,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * ComfyUI /ws 进度监听：只服务于「步数 x/y」显示，任务状态一律仍以 /queue + /history 为准，ws 挂了不影响出图。
- * 文本帧维护 prompt_id → (value, max)；二进制帧（预览图）不重载 onMessage(ByteString) 即被丢弃。
+ * 文本帧维护 prompt_id → (value, max)；r50 起二进制帧在「即时预览」开关打开时解码成 Bitmap 按 prompt_id 缓存
+ * （仅内存，绝不落盘/入图库），开关关时与旧行为一致直接丢弃。
  * 0.29.0 源码确认：progress/executing/execution_* 只发给「正在执行的 prompt 的提交 client_id」，
  * 所以这里的 clientId 必须和提交 /prompt 时用的 client_id 相同（都用 settings.comfyClientId()）。
  */
@@ -41,6 +45,26 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
     private val currentNodes = HashMap<String, String>()
     /** r42：execution_error 详情，按 prompt_id 独立缓存（不被下面的 clear 清掉），最多 20 条。 */
     private val errors = BoundedCache<String, ExecError>(ERROR_CACHE_MAX)
+    /** r50：即时预览开关最新值；init 里的 settings.flow 收集器维护，关时顺手清缓存。 */
+    private val previewOn = AtomicBoolean(false)
+    /** r50：prompt_id → 最近一帧预览（每 prompt 最多 1 张，覆盖写）。仅内存，不 recycle
+     *  （旧图可能正被 Compose 画着，recycle 会崩；换新引用让旧图交 GC）。 */
+    private val previews = HashMap<String, Bitmap>()
+    /** r50：二进制帧归属的 prompt——二进制帧不带 prompt_id，按「正在 executing 的 prompt」记账。 */
+    @Volatile private var executingPid: String? = null
+
+    init {
+        // r50：观察即时预览开关。关 → 停解码 + 清已有帧；开 → 下一帧起解码（不补历史帧）。
+        // 收集失败（磁盘读坏等罕见情况）就让预览停在上一个状态，不影响步数主功能。
+        scope.launch {
+            runCatching {
+                settings.flow.collect { s ->
+                    previewOn.set(s.livePreviewEnabled)
+                    if (!s.livePreviewEnabled) clearPreviews()
+                }
+            }
+        }
+    }
 
     private val lastTouch = AtomicLong(0L)
     private val socketGone = AtomicBoolean(true)
@@ -70,6 +94,14 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
     /** r42：某 prompt 的 execution_error 详情（WS 收到过才有）；没有返回 null，不阻塞等待。 */
     fun errorOf(promptId: String): ExecError? = errors[promptId]
 
+    /** r50：某 prompt 最近一帧预览；没有返回 null。仅内存，随任务终结被 clear 清掉。 */
+    fun previewFor(promptId: String): Bitmap? = synchronized(lock) { previews[promptId] }
+
+    /** r50：清掉全部预览帧（关开关用）。不 recycle：旧图可能正被 Compose 画着。 */
+    fun clearPreviews() {
+        synchronized(lock) { previews.clear() }
+    }
+
     private suspend fun loop() {
         val backoff = longArrayOf(1000L, 3000L, 6000L, 10000L)
         var retryAt = 0L
@@ -78,6 +110,8 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
             if (now - lastTouch.get() > IDLE_MS) {
                 closeSocket()
                 activeUrl = null
+                // r50：连接已闲置（没有进行中的任务），预览缓存一并清掉，不攒内存
+                clearPreviews()
                 return
             }
             val want = try {
@@ -138,6 +172,11 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
             if (!stale()) handleText(text)
         }
 
+        // r50：二进制帧 = 采样过程预览图（服务端 --preview-method ≠ none 才有）。开关关时立即丢弃。
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (!stale()) handleBinary(bytes.toByteArray())
+        }
+
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             // 旧连接也要完成 close 握手；但状态只许当前连接改
             try {
@@ -178,35 +217,63 @@ class ComfyProgress(private val settings: SettingsStore, auth: okhttp3.Intercept
                 data.optString("node").takeIf { it.isNotBlank() }?.let { node ->
                     if (pid.isNotBlank()) synchronized(lock) { currentNodes[pid] = node }
                 }
+                // r50：progress 事件证明该 prompt 正在执行，二进制预览帧记账到它头上
+                if (pid.isNotBlank()) executingPid = pid
             }
             "executing" ->
                 // node=null 表示该 prompt 执行结束（0.29.0 main.py），清掉进度；node 有值的是节点开始
                 if (data.isNull("node") || data.optString("node").isBlank()) {
-                    data.optString("prompt_id").takeIf { it.isNotBlank() }?.let { clear(it) }
+                    data.optString("prompt_id").takeIf { it.isNotBlank() }?.let {
+                        if (executingPid == it) executingPid = null
+                        clear(it)
+                    }
                 } else {
                     val pid = data.optString("prompt_id")
                     val node = data.optString("node")
                     if (pid.isNotBlank() && node.isNotBlank()) {
                         synchronized(lock) { currentNodes[pid] = node }
+                        executingPid = pid
                     }
                 }
             "execution_success", "execution_interrupted" ->
-                data.optString("prompt_id").takeIf { it.isNotBlank() }?.let { clear(it) }
+                data.optString("prompt_id").takeIf { it.isNotBlank() }?.let {
+                    if (executingPid == it) executingPid = null
+                    clear(it)
+                }
             "execution_error" -> {
                 val pid = data.optString("prompt_id")
                 if (pid.isNotBlank()) {
                     // 错误缓存独立于 steps/currentNodes；坏消息直接忽略，不影响进度显示
                     runCatching { parseExecutionError(data) }.getOrNull()?.let { errors.put(pid, it) }
+                    if (executingPid == pid) executingPid = null
                     clear(pid)
                 }
             }
         }
     }
 
+    /**
+     * r50：二进制预览帧。事件类型只认 1（PREVIEW_IMAGE）；格式不严格校验（BitmapFactory 自己嗅探，
+     * 解不出就丢）。归属「正在 executing 的 prompt」。开关关、无归属、解不出图都直接丢，
+     * 不分配、不落盘。每步多帧时只保留最后一帧（覆盖写）。
+     */
+    private fun handleBinary(frame: ByteArray) {
+        if (!previewOn.get()) return
+        val pid = executingPid ?: return
+        val img = PreviewFrame.imageBytes(frame) ?: return
+        val bmp = try {
+            BitmapFactory.decodeByteArray(img, 0, img.size)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        synchronized(lock) { previews[pid] = bmp }
+    }
+
     private fun clear(promptId: String) {
         synchronized(lock) {
             steps.remove(promptId)
             currentNodes.remove(promptId)
+            previews.remove(promptId)
         }
     }
 

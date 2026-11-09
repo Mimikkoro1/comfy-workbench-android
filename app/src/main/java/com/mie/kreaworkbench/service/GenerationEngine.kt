@@ -88,6 +88,12 @@ class GenerationEngine(
     /** r44 看门狗：上次「有进展」的时刻与当时的进展签名；终态/取消/暂停时移除。 */
     private val lastProgressAt = ConcurrentHashMap<String, Long>()
     private val lastProgressSig = ConcurrentHashMap<String, String>()
+    /**
+     * r55：该任务的即时预览已退役（首个成品入库可展示后置位）。置位后 running/downloading
+     * 的轮询一律不再透传预览——多图批次里第 1 张落地后，后续第 2/3 张的采样帧不许把盖层
+     * 又压回新壁纸上。clientId 每次提交都是新 UUID，无需清理；重试/继续本就没有采样帧。
+     */
+    private val previewRetired = ConcurrentHashMap.newKeySet<String>()
     val snapshot = MutableStateFlow<List<LiveJob>>(emptyList())
     val revision = MutableStateFlow(0L)
     /**
@@ -684,7 +690,7 @@ class GenerationEngine(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                put((live[clientId] ?: fromRemote(clientId, job, "downloading")).copy(phase = "downloading", downloadFailed = true, error = appContext.str(R.string.err_video_download, e.message ?: appContext.str(R.string.err_net))))
+                put((live[clientId] ?: fromRemote(clientId, job, "downloading")).copy(phase = "downloading", downloadFailed = true, error = appContext.str(R.string.err_video_download, e.message ?: appContext.str(R.string.err_net)), preview = null))
                 return false
             }
             // 宽高用真实容器尺寸；取不到就 0（UI 退回 16:9）
@@ -723,6 +729,7 @@ class GenerationEngine(
                 kind = "video",
             )
             lastResultId.value = db.insertImage(videoRow)
+            retirePreview(clientId)
             cache.enforce()
             revision.update { it + 1 }
         }
@@ -772,6 +779,7 @@ class GenerationEngine(
                     (live[clientId] ?: fromRemote(clientId, job, "downloading")).copy(
                         phase = "downloading", downloadFailed = true,
                         error = appContext.str(R.string.err_image_download, e.message ?: appContext.str(R.string.err_net)),
+                        preview = null,
                     ),
                 )
                 return false
@@ -834,6 +842,7 @@ class GenerationEngine(
                 albumUri = "",
             )
             lastResultId.value = db.insertImage(imgRow)
+            retirePreview(clientId)
             cache.enforce()
             revision.update { it + 1 }
         }
@@ -859,8 +868,20 @@ class GenerationEngine(
                 downloadFailed = false,
                 error = "",
                 prompt = job.prompt.ifBlank { cur.prompt },
+                // r55：下载期保留预览帧（r50 的「进下载即清」废除）——copy 不带 preview 字段即沿用；
+                // 清帧锚点在 saveImages/saveVideos 首次 insertImage 成功之后（retirePreview）。
             ),
         )
+    }
+
+    /**
+     * r55：首个成品已写入本地库（可展示）后调用——钉死该任务预览并清掉现存帧。
+     * 多图批次第一张可展示即清，盖层随即交给新成品壁纸（lastResultId 驱动滑入），
+     * 不再压住壁纸等全部下载完。下载失败/取消/失败路径不走这里：那些本来就置 null。
+     */
+    private fun retirePreview(clientId: String) {
+        previewRetired.add(clientId)
+        live[clientId]?.takeIf { it.preview != null }?.let { put(it.copy(preview = null)) }
     }
 
     private suspend fun rememberSeeds(job: RemoteJob) {
@@ -1331,6 +1352,14 @@ class GenerationEngine(
             prompt = job.prompt,
             stage = job.stage.ifBlank { cur?.stage ?: "" },
             createdAt = cur?.createdAt ?: System.currentTimeMillis(),
+            // r55：running 与 downloading 都透传/沿用即时预览——慢网下载期仍盖最后一帧，
+            // 成品首次入库（previewRetired）后才清，壁纸交接给新成品、中间不闪回上一张；
+            // 其余 phase（终态/暂停/排队/上传/提交）一律 null。WS 断线时沿用上一帧（少闪烁）。
+            preview = if ((phase == "running" || phase == "downloading") && clientId !in previewRetired) {
+                job.preview ?: cur?.preview
+            } else {
+                null
+            },
         )
     }
 

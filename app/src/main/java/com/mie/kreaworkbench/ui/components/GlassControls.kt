@@ -166,7 +166,7 @@ fun GlassCard(
                     if (classic) {
                         Modifier.background(MaterialTheme.colorScheme.surfaceBright)
                     } else {
-                        Modifier.immersiveGlass(20.dp)
+                        Modifier.immersiveGlass(20.dp, shape as RoundedCornerShape)
                     },
                 )
                 .border(1.dp, if (classic) cardBorder() else ImmersiveHairline, shape)

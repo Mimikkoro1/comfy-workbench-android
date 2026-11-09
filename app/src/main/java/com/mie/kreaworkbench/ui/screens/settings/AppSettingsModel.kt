@@ -443,6 +443,7 @@ class AppSettingsModel(app: Application) : AndroidViewModel(app) {
     fun uiStyle(kind: ThemeKind) = viewModelScope.launch { c.settings.update { it.copy(uiStyle = kind.id) } }
     fun notify(on: Boolean) = viewModelScope.launch { c.settings.update { it.copy(notifyEnabled = on) } }
     fun blur(on: Boolean) = viewModelScope.launch { c.settings.update { it.copy(blurEnabled = on) } }
+
     fun cache(gb: Int) = viewModelScope.launch {
         c.settings.update { it.copy(cacheLimitGb = gb) }
         usage.value = withContext(Dispatchers.IO) {

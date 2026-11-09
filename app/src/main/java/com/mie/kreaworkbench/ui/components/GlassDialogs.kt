@@ -243,7 +243,7 @@ private fun GlassChrome(content: @Composable () -> Unit) {
 private fun Modifier.glassPanel(shape: Shape, face: Color = GlassPanelFallback): Modifier =
     clip(shape)
         .background(face)
-        .glass(face, 24.dp, GlassPanelTint)
+        .glass(face, 24.dp, GlassPanelTint, shape = shape as RoundedCornerShape)
         .border(1.dp, ImmersiveHairline, shape)
 
 @Composable

@@ -151,7 +151,7 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
     var gachaCategoryPick by mutableStateOf<String?>(null)
     var gachaMasters by mutableStateOf<List<GachaMaster>>(emptyList())
         private set
-    /** 服端动态筛选项。null = 旧服没给 options（UI 回退写死列表）；非 null 时空数组 = 该框不画。 */
+    /** 服端动态筛选项。null = 旧服没给 options（UI 回退写死列表；r56 起衣柜池不回退，回空列表）；非 null 时空数组 = 该框不画。 */
     var gachaOptions by mutableStateOf<GachaOptions?>(null)
         private set
     var gachaMastersError by mutableStateOf("")
@@ -943,6 +943,11 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { c.settings.update(block) }
     }
 
+    /** r51：「即时预览」开关（原在外观页，挪到生成页「更多设置」抽屉；存储键 live_preview 不变）。 */
+    fun setLivePreview(on: Boolean) {
+        viewModelScope.launch { c.settings.update { it.copy(livePreviewEnabled = on) } }
+    }
+
     fun setAdvGacha(on: Boolean) {
         advOn = on
         updateGacha { it.copy(advGacha = on) }
@@ -1060,10 +1065,12 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
      * - 刷新不再先清目录：保留上一份，成功整体替换，同服失败只报错不清、不重置任何选择；
      * - 结果写回前按代号校验，晚到的旧请求一律丢弃；
      * - 只有成功拿到目录才校正五维并落盘（校正基准用此刻的设置值，不是请求前快照）。
+     * r56：force = true 跳过同址 10s 防抖（「刷新目录」用），单飞与代号校验照旧。
      */
-    fun refreshGachaMasters(base: String) {
+    fun refreshGachaMasters(base: String, force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
         if (
+            !force &&
             base == gachaRefreshOkBase &&
             now - gachaRefreshOkAt < 10_000L &&
             gachaRefreshJob?.isActive != true
@@ -1097,6 +1104,15 @@ class CustomModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 if (gen == gachaRefreshGen) gachaMastersLoaded = true
             }
+        }
+    }
+
+    /** r56：生成页「刷新目录」。用户主动点 = 强制重拉 /api/masters（绕过同址 10s 防抖）；地址为空就不打。 */
+    fun refreshGachaCatalog() {
+        viewModelScope.launch {
+            val url = c.settings.current().advGachaUrl
+            if (url.isBlank()) return@launch
+            refreshGachaMasters(url, force = true)
         }
     }
 

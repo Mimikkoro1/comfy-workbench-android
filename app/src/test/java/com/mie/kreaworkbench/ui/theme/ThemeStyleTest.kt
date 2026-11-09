@@ -40,10 +40,31 @@ class ThemeStyleTest {
             appearanceRows(ThemeKind.CLASSIC, 34),
         )
         assertEquals(
-            listOf(AppearanceRow.STYLE, AppearanceRow.THEME, AppearanceRow.LANGUAGE, AppearanceRow.AMOLED),
+            listOf(
+                AppearanceRow.STYLE,
+                AppearanceRow.THEME,
+                AppearanceRow.LANGUAGE,
+                AppearanceRow.AMOLED,
+            ),
             appearanceRows(ThemeKind.CLASSIC, 30),
         )
         assert(appearanceRows(ThemeKind.CLASSIC, 31).contains(AppearanceRow.DYNAMIC))
+    }
+
+    /** r51：即时预览开关挪到生成页「更多设置」抽屉，外观页枚举只剩主题相关行。 */
+    @Test
+    fun `appearance rows trimmed to theme-related only`() {
+        assertEquals(
+            listOf(
+                AppearanceRow.STYLE,
+                AppearanceRow.THEME,
+                AppearanceRow.LANGUAGE,
+                AppearanceRow.DYNAMIC,
+                AppearanceRow.AMOLED,
+                AppearanceRow.BLUR,
+            ),
+            AppearanceRow.entries.toList(),
+        )
     }
 
     @Test

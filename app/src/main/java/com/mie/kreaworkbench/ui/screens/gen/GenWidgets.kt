@@ -113,7 +113,6 @@ import com.mie.kreaworkbench.ui.motion.sharedImage
 import com.mie.kreaworkbench.ui.motion.thumbRequest
 import com.mie.kreaworkbench.ui.theme.DarkBg
 import com.mie.kreaworkbench.ui.theme.LocalIsDark
-import com.mie.kreaworkbench.ui.theme.cardBorder
 import com.mie.kreaworkbench.ui.theme.isClassic
 import com.mie.kreaworkbench.util.VideoThumb
 import java.io.File
@@ -294,7 +293,7 @@ fun GenerateCapsule(
     val classic = frosted && isClassic()
     val plate = when {
         classic -> Modifier.background(scheme.primary)
-        frosted -> Modifier.immersiveGlass(20.dp)
+        frosted -> Modifier.immersiveGlass(20.dp, shape)
         generating -> Modifier.background(scheme.primary.copy(alpha = 0.22f))
         else -> Modifier.background(scheme.primary)
     }
@@ -534,7 +533,7 @@ fun GlassPeekBar(
         modifier
             .fillMaxWidth()
             .clip(shape)
-            .immersiveGlass(18.dp)
+            .immersiveGlass(18.dp, shape)
             .border(1.dp, ImmersiveHairline, shape)
             .clickable(onClick = onClick)
             .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
@@ -570,6 +569,12 @@ fun GlassPeekBar(
  *
  * [awaitingMedia]：媒体列表还没完成第一次读库（冷启动）。此时不画 GlassFallback，
  * 用深色底顶着，等数据和解码结果，避免「兜底渐变 → 实图」的跳变。
+ *
+ * [livePreview]：r51 即时预览盖层。开关开且生成任务在 running|downloading 时，把引擎内存里的中间帧
+ * 全屏盖在成品壁纸之上（Crop，随 WS 推送换引用刷新）；null 时完全走原有成品逻辑。
+ * r55：下载期也保留最后一帧，引擎在首个成品入库可展示后才清——慢网不再「闪回上一张成品」。
+ * 中间帧只过内存：不进 HeroBackdropCache、不触发滑入、不进图库/相册/磁盘；
+ * 取消 / 失败 / 成功后调用方传回 null，壁纸自动回到原来的成品图（或新成图）。
  */
 @Composable
 fun ImmersiveBackdrop(
@@ -579,6 +584,7 @@ fun ImmersiveBackdrop(
     slideInKey: Long? = null,
     cacheKey: String? = null,
     awaitingMedia: Boolean = false,
+    livePreview: Bitmap? = null,
 ) {
     val ctx = LocalContext.current
     val dark = LocalIsDark.current
@@ -648,7 +654,9 @@ fun ImmersiveBackdrop(
     // 有图/正在加载但还没解出位图：画深色底，不要先闪 GlassFallback。
     // 解码失败时交给下面的 GlassFallback，避免永远停在黑底。
     val pendingCover = front?.bitmap == null && !decodeFailed && (image != null || awaitingMedia)
-    val openable = image != null
+    // r55：即时预览盖层可见时根背景也要可点（图库空+仅有预览时此前点不动）；
+    // 点击行为由调用方 onOpen 分支：预览态=藏/显生成页 chrome，非预览态=进看图。
+    val openable = image != null || livePreview != null
     Box(modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -690,8 +698,21 @@ fun ImmersiveBackdrop(
             ) {
                 HeroStill(shown, dark, pendingCover, Modifier)
             }
+            // r51 预览盖层：画在 hazeSource 内（毛玻璃控件连预览帧一起模糊），成品图之上、
+            // 暗角渐变之下。Image 本身不消费点击；r55 起盖层可见时根背景可点（openable 含
+            // livePreview），预览态单击由调用方切生成页 chrome，不再落到旧成品的看图入口。
+            // 帧更新由调用方换 Bitmap 引用，这里直接换图，不做过渡动画（避免闪烁感）。
+            if (livePreview != null) {
+                Image(
+                    bitmap = livePreview.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
-        if (photoOn) {
+        // 预览盖着时暗角也照画：没有成品图（兜底被盖住）时同样保住顶栏/底栏文字对比度。
+        if (photoOn || livePreview != null) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -877,7 +898,7 @@ private fun StackThumb(img: ImageRow, modifier: Modifier) {
     Box(
         modifier
             .clip(shape)
-            .glass(scheme.surface.copy(alpha = 0.72f), 14.dp, scheme.surface.copy(alpha = 0.45f))
+            .glass(scheme.surface.copy(alpha = 0.72f), 14.dp, scheme.surface.copy(alpha = 0.45f), shape = shape)
             .border(1.dp, Color.White.copy(alpha = 0.75f), shape)
             .padding(2.dp),
     ) {

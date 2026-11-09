@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.ui.theme
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -38,7 +39,8 @@ class GlassUnchangedGuardTest {
         assertLiteral(
             mainSource("ui", "components", "ImmersiveChrome.kt"),
             "Color.Black.copy(alpha = 0.58f)",
-            "Color.Black.copy(alpha = 0.50f)",
+            // r53 液态玻璃：Tint 0.40→0.22（hazeGlass 靠折射/边光补质感，厚 tint 只会更黑更扁）
+            "Color.Black.copy(alpha = 0.22f)",
             "Color.White.copy(alpha = 0.72f)",
             "Color.White.copy(alpha = 0.22f)",
             "Color.Black.copy(alpha = 0.65f)",
@@ -87,11 +89,19 @@ class GlassUnchangedGuardTest {
     }
 
     @Test
-    fun `glass blur style unchanged`() {
+    fun `glass liquid style unchanged`() {
+        val src = mainSource("ui", "components", "Glass.kt")
+        // r53 液态玻璃：开启路径钉 hazeGlass + Sources 采景 + clear 底 + 轻 tint 数值链。
         assertLiteral(
-            mainSource("ui", "components", "Glass.kt"),
-            "HazeBlurStyle.Material3",
+            src,
+            "hazeGlass(",
+            "HazeInput.Sources(state)",
+            "GlassStyle.clear",
+            "specularIntensity(0.5f)",
+            "ambientResponse(0.2f)",
         )
+        // 旧 blur 管线已废弃，不许回退（r52 的灰黑扁块就是它）。
+        assertFalse("Glass.kt 不许再引用 hazeBlur", src.contains("hazeBlur"))
     }
 
     @Test

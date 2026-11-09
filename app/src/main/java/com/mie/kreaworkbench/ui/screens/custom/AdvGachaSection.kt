@@ -63,7 +63,6 @@ import com.mie.kreaworkbench.ui.components.immersiveGlass
 
 private val GACHA_MODES = listOf("wallpaper", "gongsu", "nude")
 private val GACHA_OUTFITS = listOf("random", "signature", "char")
-private val GACHA_POOLS = listOf("auto", "casual", "lingerie", "gongsu")
 private val GACHA_POSES = listOf(
     "",
     "standing",
@@ -153,7 +152,8 @@ fun advGachaSummary(vm: CustomModel, settings: UserSettings): String {
 
 /**
  * 点筛选条后向上弹出的筛选。服装池在最下面，不进摘要。
- * r32：有 options 就按服端来——某维数组为空就整框不画；没 options（旧服）才回退写死列表。
+ * r32：有 options 就按服端来——某维数组为空就整框不画；没 options（旧服）modes/outfits/poses 才回退写死列表。
+ * r56：衣柜池不再写死回退——旧服（options == null）pools 用空列表，整框不画，不再假装有 casual/lingerie/gongsu。
  * 母版框始终保留，它是所有筛选的入口。
  * r40：抽卡地址为空（开启高级抽卡时的自动测试失败也落在这里）→ 原筛选框位置换空状态 + 「去设置」。
  */
@@ -206,11 +206,24 @@ fun AdvGachaFilterPanel(vm: CustomModel, settings: UserSettings, onGoSettings: (
             modifier = Modifier.weight(1f),
         ) { vm.pickGachaMaster(it) }
     }
-    if (!vm.gachaMastersLoaded) {
-        Text(stringResource(R.string.gacha_masters_loading), fontSize = 11.sp, color = scheme.onSurfaceVariant)
-    } else if (vm.gachaMastersError.isNotBlank()) {
-        // r39：保留旧目录的失败也要让用户看到错误（不再只在空目录时显示）
-        Text(vm.gachaMastersError, fontSize = 11.sp, color = scheme.error)
+    // r57：「刷新目录」入口挪到筛选 sheet 标题行右上角（CustomScreen.kt），状态行只留 loading/error 文案
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        when {
+            !vm.gachaMastersLoaded -> Text(
+                stringResource(R.string.gacha_masters_loading),
+                fontSize = 11.sp,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            vm.gachaMastersError.isNotBlank() -> Text(
+                // r39：保留旧目录的失败也要让用户看到错误（不再只在空目录时显示）
+                vm.gachaMastersError,
+                fontSize = 11.sp,
+                color = scheme.error,
+                modifier = Modifier.weight(1f),
+            )
+            else -> Spacer(Modifier.weight(1f))
+        }
     }
     if (view.outfits.isNotEmpty() || view.poses.isNotEmpty()) {
         Spacer(Modifier.height(6.dp))
@@ -260,7 +273,7 @@ fun AdvGachaFilterBar(
         modifier
             .fillMaxWidth()
             .clip(shape)
-            .immersiveGlass(18.dp)
+            .immersiveGlass(18.dp, shape)
             .border(1.dp, ImmersiveHairline, shape)
             .clickable(onClick = onClick)
             .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -378,7 +391,7 @@ private class GachaView(
 
 /**
  * 按服端 options 决定每一维的可选项。
- * options == null（旧服/响应里没这字段）→ 写死列表 + 本地文案，跟 r31 前一样；
+ * options == null（旧服/响应里没这字段）→ 写死列表 + 本地文案，跟 r31 前一样（r56 起衣柜池除外：pools 空列表、不画框）；
  * options != null → 用服端，空数组就是空列表（调用方据此不画框），标签优先服端 label。
  * nude / 招牌按选中母版的 has_nude / has_signature 闸；「不限」母版不闸。
  */
@@ -402,7 +415,8 @@ private fun gachaView(vm: CustomModel, settings: UserSettings): GachaView {
         modes = GACHA_MODES.map { GachaOption(it, modeLabel(it)) }
         outfits = GACHA_OUTFITS.map { GachaOption(it, outfitLabel(it)) }
         poses = GACHA_POSES.map { GachaOption(it, poseLabel(it)) }
-        pools = GACHA_POOLS.map { GachaOption(it, poolLabel(it)) }
+        // r56：旧服不假装有写死四池；目录刷不到就没有服装池框
+        pools = emptyList()
     } else {
         modes = visibleModes(options.modes, owner)
         outfits = visibleOutfits(options.outfits, owner)
@@ -500,12 +514,14 @@ private fun outfitLabel(id: String): String = when (id) {
     else -> stringResource(R.string.gacha_outfit_random)
 }
 
+/** r56：auto 与旧缓存里的三个 id 给本地文案；未知 id（服端新池未刷新等）原样显示 id，绝不冒充「自动」。 */
 @Composable
 private fun poolLabel(id: String): String = when (id) {
+    "auto" -> stringResource(R.string.gacha_pool_auto)
     "casual" -> stringResource(R.string.gacha_pool_casual)
     "lingerie" -> stringResource(R.string.gacha_pool_lingerie)
     "gongsu" -> stringResource(R.string.gacha_pool_gongsu)
-    else -> stringResource(R.string.gacha_pool_auto)
+    else -> id
 }
 
 @Composable

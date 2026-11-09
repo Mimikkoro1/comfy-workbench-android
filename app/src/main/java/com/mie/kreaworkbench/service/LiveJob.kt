@@ -37,6 +37,9 @@ data class LiveJob(
     val paths: List<String> = emptyList(),
     val prompt: String = "",
     val createdAt: Long = 0L,
+    /** r50：采样过程即时预览帧（仅内存）。r55：running→downloading 全程保留，首个成品入库后才清；
+     *  终态/取消/失败一律 null。UI 在 phase=running|downloading 且开关开时展示。 */
+    val preview: android.graphics.Bitmap? = null,
 )
 
 /**
@@ -163,3 +166,23 @@ private fun speedLabel(bps: Double): String {
 }
 
 val TERMINAL = setOf("success", "partial", "failed", "cancelled", "paused")
+
+/** 进行中的进度阶段：底栏跟进度、r51 根背景预览盖层都用它判断「正在跑」。 */
+val PROGRESS_PHASES = setOf("running", "downloading", "uploading", "upload_ask", "submitting")
+
+// 注意与 TERMINAL 的区别：这里「非进行中」的排除集**不含 paused**——
+// 暂停任务仍算进行中（底栏要保留恢复入口），沿用 CustomScreen 的原始语义。
+private val ACTIVE_EXCLUDES = setOf("success", "partial", "failed", "cancelled")
+
+/**
+ * 「当前要跟的任务」选取规则（r51 自 CustomScreen 抽出，防止底栏与根背景盖层两处漂移）：
+ * 在 mode 圈定的范围内，先取第一个进度阶段任务，没有再取排队，再没有取第一个非终态
+ * （paused / upload_fail_ask 等兜底仍算进行中）。传入列表需按 snapshot 的 createdAt 降序。
+ */
+fun pickProgressJob(jobs: List<LiveJob>, mode: String? = null): LiveJob? {
+    val scoped = if (mode == null) jobs else jobs.filter { it.mode == mode }
+    val active = scoped.filter { it.phase !in ACTIVE_EXCLUDES }
+    return active.firstOrNull { it.phase in PROGRESS_PHASES }
+        ?: active.firstOrNull { it.phase == "queued" }
+        ?: active.firstOrNull()
+}

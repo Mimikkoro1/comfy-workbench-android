@@ -3,8 +3,14 @@
 package com.mie.kreaworkbench.ui.components
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -130,6 +137,31 @@ fun HeaderIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * r55：生成页 chrome（底栏/表单/参考槽/图库卡片）藏显的统一动效。
+ * r55.1：退场 = 淡出 + 整体小幅下滑（24dp，「收走/坠走」手感）；入场从下方 24dp 滑回 + 淡入。
+ * 包一层是为了避开 Compose 编译器对 ColumnScope.AnimatedVisibility 隐式接收者的限制
+ * （调用点常在 ColumnScope 扩展内部的 Box lambda 里，不能带外层接收者调用）。
+ */
+@Composable
+fun ChromeFade(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val dipPx = with(LocalDensity.current) { ChromeFadeDip.roundToPx() }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(CHROME_FADE_MS)) { dipPx } + fadeIn(tween(CHROME_FADE_MS)),
+        exit = slideOutVertically(tween(CHROME_FADE_MS)) { dipPx } + fadeOut(tween(CHROME_FADE_MS)),
+        modifier = modifier,
+        content = { content() },
+    )
+}
+
+private const val CHROME_FADE_MS = 200
+private val ChromeFadeDip = 24.dp
+
 @Composable
 fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Modifier) {
     val shape = MaterialTheme.shapes.extraLarge
@@ -149,7 +181,7 @@ fun BottomDock(tab: AppTab, onSelect: (AppTab) -> Unit, modifier: Modifier = Mod
                 .fillMaxWidth()
                 .height(64.dp)
                 .clip(shape)
-                .immersiveGlass(28.dp)
+                .immersiveGlass(28.dp, shape as RoundedCornerShape)
                 .border(1.dp, ImmersiveHairline, shape),
         )
         Row(

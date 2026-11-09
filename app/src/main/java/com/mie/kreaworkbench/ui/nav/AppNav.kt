@@ -1,5 +1,6 @@
 package com.mie.kreaworkbench.ui.nav
 
+import android.graphics.Bitmap
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -10,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Job
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
@@ -63,9 +65,11 @@ import com.mie.kreaworkbench.R
 import com.mie.kreaworkbench.KreaApp
 import com.mie.kreaworkbench.data.net.urlTargetsLocalNetwork
 import com.mie.kreaworkbench.data.settings.UserSettings
+import com.mie.kreaworkbench.service.pickProgressJob
 import com.mie.kreaworkbench.data.workflows.ImportedWorkflowMeta
 import com.mie.kreaworkbench.ui.components.AppTab
 import com.mie.kreaworkbench.ui.components.BottomDock
+import com.mie.kreaworkbench.ui.components.ChromeFade
 import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassHostOverlay
 import com.mie.kreaworkbench.ui.components.GlassHostProvider
@@ -228,6 +232,25 @@ fun AppNav(nav: NavModel) {
     val lanGuard = rememberLocalNetworkGuard()
     val navApp = androidx.compose.ui.platform.LocalContext.current.applicationContext as KreaApp
     val bootSettings by navApp.container.settings.flow.collectAsState(initial = UserSettings())
+    // r51：即时预览盖层数据源。与生成页底栏（CustomScreen）共用同一条进度任务选取规则；
+    // 开关开 + 选中任务 phase==running|downloading 时把引擎内存里的中间帧交给根背景盖层，
+    // 其余一律传 null。r55：下载期也保留最后一帧（引擎在首个成品入库后才清 preview），
+    // 慢网时不再「闪回上一张成品」；取消/失败/成功后引擎侧已清 preview，壁纸自动回滚/换新成图。
+    // 中间帧只过内存，不进图库/相册/磁盘/HeroBackdropCache。
+    val liveJobs by navApp.container.engine.snapshot.collectAsState()
+    val livePreviewFrame: Bitmap? = if (bootSettings.livePreviewEnabled) {
+        pickProgressJob(liveJobs, mode = "custom")
+            ?.takeIf { it.phase == "running" || it.phase == "downloading" }?.preview
+    } else {
+        null
+    }
+    // r55：生成页 chrome 显隐。仅当即时预览盖层可见（livePreviewFrame != null，即「预览大图态」）
+    // 时，单击根背景可切换；预览结束（帧变 null）或离开生成页时强制复位为可见，避免卡在全藏 UI。
+    // 只作用于生成页自己的 chrome（BottomDock + 表单/胶囊），图库/看图页的 chrome 不受影响。
+    var genChromeVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(livePreviewFrame, scene) {
+        if (livePreviewFrame == null || scene != Scene.Home) genChromeVisible = true
+    }
     LaunchedEffect(bootSettings.serverUrl, bootSettings.advGachaUrl, bootSettings.advGacha) {
         if (LocalNetworkGlobalPrompt.shown) return@LaunchedEffect
         val s = bootSettings
@@ -308,14 +331,21 @@ fun AppNav(nav: NavModel) {
                 image = rootMedia.firstOrNull(),
                 onOpen = {
                     // 只有生成页的沉浸态，点空白才进看图。图库/看图页里背景不响应点击。
-                    if (scene == Scene.Home && nav.tab == AppTab.T2I && rootWorkflow.isNotBlank()) {
-                        val ids = rootMedia.take(20).map { it.id }
-                        if (ids.isNotEmpty()) nav.openViewer(ids, 0)
+                    // r55：即时预览盖层可见时单击改为藏/显生成页 chrome——不进看图（旧行为看的是
+                    // 上一张成品）、不进图库、不换图；再点恢复。无预览时保持原 openViewer 行为。
+                    if (scene == Scene.Home && nav.tab == AppTab.T2I) {
+                        if (livePreviewFrame != null) {
+                            genChromeVisible = !genChromeVisible
+                        } else if (rootWorkflow.isNotBlank()) {
+                            val ids = rootMedia.take(20).map { it.id }
+                            if (ids.isNotEmpty()) nav.openViewer(ids, 0)
+                        }
                     }
                 },
                 slideInKey = rootNewResultId,
                 cacheKey = "root",
                 awaitingMedia = rootAwaitingMedia,
+                livePreview = livePreviewFrame,
             )
         }
         // r47：经典风格下，进/出二级页的过渡动画带淡入淡出，实心底跟着半透明，
@@ -369,7 +399,7 @@ fun AppNav(nav: NavModel) {
             },
         ) { target ->
             CompositionLocalProvider(LocalAnimScope provides this) {
-                SceneBody(target, nav, holder)
+                SceneBody(target, nav, holder, genChromeVisible)
             }
         }
         GlassHostOverlay()
@@ -463,9 +493,9 @@ fun AppNav(nav: NavModel) {
     }
 }
 @Composable
-private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) {
+private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder, genChromeVisible: Boolean) {
     when (scene) {
-        Scene.Home -> HomeLayer(nav, holder)
+        Scene.Home -> HomeLayer(nav, holder, genChromeVisible)
         Scene.Gallery -> holder.SaveableStateProvider("gallery") {
             GalleryScreen(
                 onBack = { nav.pop() },
@@ -524,7 +554,7 @@ private fun SceneBody(scene: Scene, nav: NavModel, holder: SaveableStateHolder) 
 }
 
 @Composable
-private fun HomeLayer(nav: NavModel, holder: SaveableStateHolder) {
+private fun HomeLayer(nav: NavModel, holder: SaveableStateHolder, genChromeVisible: Boolean) {
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val wf by nav.workflow.collectAsState()
     val immersive = nav.tab == AppTab.T2I && wf.isNotBlank()
@@ -543,8 +573,15 @@ private fun HomeLayer(nav: NavModel, holder: SaveableStateHolder) {
                     )
                 }
             }
-            TabPager(nav, holder)
-            BottomDock(nav.tab, { nav.tab = it }, Modifier.align(Alignment.BottomCenter))
+            TabPager(nav, holder, genChromeVisible)
+            // r55：预览大图态（livePreviewFrame != null 且用户点了空白）藏底栏；r55.1 起与生成页
+            // chrome 同款动效（淡出+下滑 24dp）。退出动画完成后整块移出组合，点击落回根背景。
+            ChromeFade(
+                visible = genChromeVisible,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                BottomDock(nav.tab, { nav.tab = it })
+            }
         }
     }
 }
@@ -583,20 +620,34 @@ private fun ClassicPageVeil() {
     )
 }
 
+/** r54：Tab 切换方向滑入。非 classic 按 ordinal 方向——向右（ordinal 变大）新页从右进、旧页向左出，
+ *  向左相反；偏移全宽，比 Overlay 栈的 1/4 幅度更有方向感。classic 仍只做淡入淡出（低端机档，零回归）；
+ *  同 ordinal（不应发生）退回轻 fade 兜底，避免空滑。 */
+private fun tabContentTransform(initial: AppTab, target: AppTab, classic: Boolean): ContentTransform {
+    if (classic) {
+        // 经典主题：低端机档，只留淡入淡出（r54 略加长到可感知）。
+        return fadeIn(tween(260, delayMillis = 90)) togetherWith fadeOut(tween(140))
+    }
+    if (initial == target) {
+        return fadeIn(tween(210, delayMillis = 90)) togetherWith fadeOut(tween(90))
+    }
+    val toRight = target.ordinal > initial.ordinal
+    val enter = slideInHorizontally(tween(300, easing = EmphasizedDecelerate)) { if (toRight) it else -it } +
+        fadeIn(tween(300))
+    val exit = slideOutHorizontally(tween(220, easing = EmphasizedAccelerate)) { if (toRight) -it else it } +
+        fadeOut(tween(220))
+    return enter togetherWith exit
+}
+
 @Composable
-private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
+private fun TabPager(nav: NavModel, holder: SaveableStateHolder, genChromeVisible: Boolean) {
     // transitionSpec 不是 composable，先在外层取好。
     val classic = isClassic()
     AnimatedContent(
         targetState = nav.tab,
         transitionSpec = {
-            // 经典主题：低端机档，tab 切换只留淡入淡出；毛玻璃保留原来的轻缩放。
-            if (classic) {
-                fadeIn(tween(210, delayMillis = 90)).togetherWith(fadeOut(tween(90)))
-            } else {
-                (fadeIn(tween(210, delayMillis = 90)) + scaleIn(tween(210, delayMillis = 90), initialScale = 0.96f))
-                    .togetherWith(fadeOut(tween(90)))
-            }
+            // r54：方向滑入（classic 只 fade），细节见 tabContentTransform。
+            tabContentTransform(initialState, targetState, classic)
         },
         label = "tabs",
     ) { tab ->
@@ -630,6 +681,7 @@ private fun TabPager(nav: NavModel, holder: SaveableStateHolder) {
                                 nav.pendingAutoScan = com.mie.kreaworkbench.data.discovery.LanHit.Kind.GACHA
                                 nav.push(Overlay.SettingsConnection)
                             },
+                            chromeVisible = genChromeVisible,
                         )
                     }
                 }

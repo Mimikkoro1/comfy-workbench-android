@@ -82,6 +82,8 @@ data class UserSettings(
     val advGachaHistory: List<String> = emptyList(),
     /** 高级抽卡引导点过「不再提示」。 */
     val advGachaGuideOff: Boolean = false,
+    /** r50 即时预览：开 = 解码并展示采样过程 WS 二进制预览帧；默认关（不解码、不持有）。 */
+    val livePreviewEnabled: Boolean = false,
 )
 
 class SettingsStore(private val context: Context) {
@@ -132,6 +134,8 @@ class SettingsStore(private val context: Context) {
     private val kAdvCategory = stringPreferencesKey("adv_gacha_category")
     private val kAdvHist = stringPreferencesKey("adv_gacha_history")
     private val kAdvGuideOff = booleanPreferencesKey("adv_gacha_guide_off")
+    // r50 即时预览开关
+    private val kLivePreview = booleanPreferencesKey("live_preview")
     // round14 更新检查：上次自动检查时间 + 用户忽略的 tag（不进 UserSettings，单独读写）
     private val kUpdateLast = longPreferencesKey("update_last_check")
     private val kUpdateIgnored = stringPreferencesKey("update_ignored_tag")
@@ -196,6 +200,7 @@ class SettingsStore(private val context: Context) {
             advGachaCategory = p[kAdvCategory] ?: "",
             advGachaHistory = parseUrlList(p[kAdvHist].orEmpty()),
             advGachaGuideOff = p[kAdvGuideOff] ?: false,
+            livePreviewEnabled = p[kLivePreview] ?: false,
         )
     }
 
@@ -362,6 +367,7 @@ class SettingsStore(private val context: Context) {
             p[kAdvCategory] = next.advGachaCategory
             p[kAdvHist] = urlListJson(next.advGachaHistory)
             p[kAdvGuideOff] = next.advGachaGuideOff
+            p[kLivePreview] = next.livePreviewEnabled
         }
     }
 

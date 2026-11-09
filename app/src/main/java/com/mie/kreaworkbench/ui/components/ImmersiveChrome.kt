@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -26,7 +27,7 @@ val ImmersiveGlassFallback: Color
     get() = if (isClassic()) MaterialTheme.colorScheme.surfaceBright else Color.Black.copy(alpha = 0.58f)
 val ImmersiveGlassTint: Color
     @Composable @ReadOnlyComposable
-    get() = if (isClassic()) MaterialTheme.colorScheme.surfaceBright else Color.Black.copy(alpha = 0.50f)
+    get() = if (isClassic()) MaterialTheme.colorScheme.surfaceBright else Color.Black.copy(alpha = 0.22f)
 val ImmersiveInk: Color
     @Composable @ReadOnlyComposable
     get() = if (themedInk()) MaterialTheme.colorScheme.onSurface else Color.White
@@ -57,8 +58,8 @@ internal fun themedInk(): Boolean = isClassic() && !LocalOverPhoto.current
 val LocalOverPhoto = staticCompositionLocalOf { false }
 
 @Composable
-fun Modifier.immersiveGlass(radius: Dp = 18.dp): Modifier =
-    glass(ImmersiveGlassFallback, radius, ImmersiveGlassTint)
+fun Modifier.immersiveGlass(radius: Dp = 18.dp, shape: RoundedCornerShape = RoundedCornerShape(0.dp)): Modifier =
+    glass(ImmersiveGlassFallback, radius, ImmersiveGlassTint, shape = shape)
 
 /** 白图标，底下垫一层很轻的暗影，浅色图和深色图上都站得住。 */
 @Composable

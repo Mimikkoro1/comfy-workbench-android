@@ -17,25 +17,25 @@ class ServerUrlNormalizerTest {
 
     @Test
     fun privateIpv4GetsDefaultPort() {
-        assertEquals("http://192.168.1.100:8188", norm("192.168.1.100"))
+        assertEquals("http://192.168.1.3:8188", norm("192.168.1.3"))
         assertEquals("http://10.0.0.52:8188", norm("10.0.0.52"))
         assertEquals("http://172.16.0.5:8188", norm("172.16.0.5"))
         // 公网段不补
         assertEquals("http://172.32.0.5", norm("172.32.0.5"))
         // 显式 http 补，显式 https 不补
-        assertEquals("http://192.168.1.100:8188", norm("http://192.168.1.100"))
-        assertEquals("https://192.168.1.100", norm("https://192.168.1.100"))
+        assertEquals("http://192.168.1.3:8188", norm("http://192.168.1.3"))
+        assertEquals("https://192.168.1.3", norm("https://192.168.1.3"))
     }
 
     @Test
     fun gachaKindGetsItsPort() {
-        assertEquals("http://192.168.1.100:8787", norm("192.168.1.100", ServerKind.GACHA))
+        assertEquals("http://192.168.1.3:8787", norm("192.168.1.3", ServerKind.GACHA))
     }
 
     @Test
     fun existingPortAndTrailingSlashUnchanged() {
-        assertEquals("http://192.168.1.100:8188", norm("http://192.168.1.100:8188/"))
-        assertEquals("http://192.168.1.100:8188", norm("192.168.1.100：8188"))
+        assertEquals("http://192.168.1.3:8188", norm("http://192.168.1.3:8188/"))
+        assertEquals("http://192.168.1.3:8188", norm("192.168.1.3：8188"))
     }
 
     @Test
@@ -48,7 +48,7 @@ class ServerUrlNormalizerTest {
     @Test
     fun apiSegmentsTruncated() {
         assertEquals("http://foo.example.com:8189", norm("foo.example.com:8189/api/system_stats"))
-        assertEquals("http://192.168.1.100:8188", norm("http://192.168.1.100:8188/ws?clientId=x#y"))
+        assertEquals("http://192.168.1.3:8188", norm("http://192.168.1.3:8188/ws?clientId=x#y"))
     }
 
     @Test
@@ -80,7 +80,7 @@ class ServerUrlNormalizerTest {
 
     @Test
     fun ipAndExplicitSchemeAndLocalNameAreSingleCandidate() {
-        assertEquals(listOf("http://192.168.1.100:8188"), serverUrlCandidates("192.168.1.100"))
+        assertEquals(listOf("http://192.168.1.3:8188"), serverUrlCandidates("192.168.1.3"))
         assertEquals(listOf("https://foo.example.com"), serverUrlCandidates("https://foo.example.com"))
         assertEquals(listOf("http://mypc.local"), serverUrlCandidates("mypc.local"))
     }

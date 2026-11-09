@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 
 package com.mie.kreaworkbench.ui.screens.custom
 
@@ -36,9 +36,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -84,6 +86,7 @@ import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.Dices
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
+import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Settings
 import com.composables.icons.lucide.Video
 import com.mie.kreaworkbench.data.modelFileName
@@ -99,6 +102,7 @@ import com.mie.kreaworkbench.ui.components.ImmersiveIcon
 import com.mie.kreaworkbench.ui.components.ImmersiveInk
 import com.mie.kreaworkbench.ui.components.ImmersiveInkMuted
 import com.mie.kreaworkbench.ui.components.LocalOverPhoto
+import com.mie.kreaworkbench.ui.components.ChromeFade
 import com.mie.kreaworkbench.ui.components.ImmersiveShadow
 import com.mie.kreaworkbench.ui.components.GlassAlertDialog
 import com.mie.kreaworkbench.ui.components.GlassBottomSheet
@@ -112,12 +116,14 @@ import com.mie.kreaworkbench.ui.components.glassPopupPanel
 import com.mie.kreaworkbench.ui.components.suppressIme
 import com.mie.kreaworkbench.ui.components.glass
 import com.mie.kreaworkbench.ui.components.immersiveGlass
+import com.mie.kreaworkbench.ui.components.glassSwitchColors
 import com.mie.kreaworkbench.ui.components.TextResultActions
 import com.mie.kreaworkbench.ui.motion.ErrorHaptic
 import com.mie.kreaworkbench.ui.motion.JobHaptics
 import com.mie.kreaworkbench.ui.motion.LocalExtraBottom
 import com.mie.kreaworkbench.ui.motion.buzz
 import com.mie.kreaworkbench.service.jobProgress
+import com.mie.kreaworkbench.service.pickProgressJob
 import com.mie.kreaworkbench.ui.screens.gen.AssetStack
 import com.mie.kreaworkbench.ui.screens.gen.BatchPicker
 import com.mie.kreaworkbench.ui.screens.gen.GenerateCapsule
@@ -142,9 +148,6 @@ import kotlin.math.roundToInt
 /** 生成页的分工：text/prompt_pool/image_sizes/int_random/file:image/file:video；model/select/int/float/bool 在设置页。 */
 private val GEN_TYPES = setOf("text", "prompt_pool", "image_sizes", "int_random", "file:image", "file:video")
 
-/** r21：这些 phase 视为「有进度的进行中」，是底栏进度条优先展示的对象（不被新排队的 queued 盖掉）。 */
-private val PROGRESS_PHASES = setOf("running", "downloading", "uploading", "upload_ask", "submitting")
-
 @Composable
 fun CustomScreen(
     workflowId: String,
@@ -154,6 +157,9 @@ fun CustomScreen(
     onGallery: () -> Unit,
     onOpenGachaSettings: () -> Unit = {},
     vm: CustomModel = viewModel(),
+    // r55：生成页 chrome（底栏生成/齿轮/胶囊/摘要 + 顶部表单区）显隐。即时预览大图态
+    // 单击根背景时由 AppNav 切换；false = 全藏（对标图库看大图，但不进 Viewer）。默认 true。
+    chromeVisible: Boolean = true,
 ) {
     // 「用于图生图」：pending 往往比 currentWorkflow 先到。id 还没对上时不消费，
     // 否则紧接着的 bind() 会把刚填的参考图清掉。对上之后先 bind 再填。
@@ -172,13 +178,11 @@ fun CustomScreen(
     val mine = jobs.filter { it.mode == "custom" }
     // r21 队列进度修：snapshot 按 createdAt 降序，最新排队任务排在最前；旧写法
     // firstOrNull{非终态} 会先命中 queued，把仍在跑的 running 进度盖成「排队中」。
-    // 现在优先「有进度的进行中」，其次排队，最后兜底（paused / upload_fail_ask 等仍要给入口）。
-    val active = mine.filter { it.phase !in setOf("success", "partial", "failed", "cancelled") }
-    val progressJob = active.firstOrNull { it.phase in PROGRESS_PHASES }
-        ?: active.firstOrNull { it.phase == "queued" }
-        ?: active.firstOrNull()
+    // r51：选取规则抽到 service.pickProgressJob，与 AppNav 根背景预览盖层共用同一条。
+    val progressJob = pickProgressJob(mine)
     // 进度跟的之外还有几个在排队（跑一张时再点生成的场景），供底栏给短提示
-    val queuedExtra = if (progressJob != null) active.count { it.clientJobId != progressJob.clientJobId && it.phase == "queued" } else 0
+    // （排队不是终态，对 mine 直接计数与旧的 active 过滤等价）
+    val queuedExtra = if (progressJob != null) mine.count { it.clientJobId != progressJob.clientJobId && it.phase == "queued" } else 0
     // 提交 400 等失败原先被滤掉，服务随即停、界面没有任何提示。没有进行中任务时，
     // 最新一条若是失败就在底栏留一行错误状态（r21 前是顶部大卡片）。
     val failedJob = if (progressJob == null) mine.firstOrNull()?.takeIf { it.phase == "failed" } else null
@@ -307,9 +311,13 @@ fun CustomScreen(
             onPickGallery = { sheet = true },
             onPickVideo = { pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
             onPickVideoGallery = { videoSheet = true },
+            chromeVisible = chromeVisible,
         )
         // —— r21 固定底栏区：细进度（进行中/失败一行）→ 生成+齿轮 → 摘要小字，均不随滚动 ——
+        // r55：chromeVisible=false（即时预览大图态点了空白）整块淡出+下滑并移出组合，
+        // 空出的点击落回根背景（再点恢复）。图库卡片 AssetStack 在 ImmersiveStage 内随藏。
         val barSink = remember { MutableInteractionSource() }
+        ChromeFade(visible = chromeVisible) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -340,7 +348,7 @@ fun CustomScreen(
                             .fillMaxWidth()
                             .padding(bottom = 4.dp)
                             .clip(barShape)
-                            .immersiveGlass(20.dp)
+                            .immersiveGlass(20.dp, barShape)
                             .border(1.dp, ImmersiveHairline, barShape)
                             // 深红只在玻璃底上叠一层；Glass* 组件本身零修改
                             .background(GlassDanger.copy(alpha = 0.18f))
@@ -522,7 +530,7 @@ fun CustomScreen(
                     Modifier
                         .size(56.dp)
                         .clip(gearShape)
-                        .immersiveGlass(20.dp)
+                        .immersiveGlass(20.dp, gearShape)
                         .border(1.dp, ImmersiveHairline, gearShape)
                         .clickable { paramsOpen = true },
                     contentAlignment = Alignment.Center,
@@ -541,6 +549,7 @@ fun CustomScreen(
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+        }
         }
     }
 
@@ -789,13 +798,33 @@ fun CustomScreen(
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 24.dp),
             ) {
-                Text(
-                    stringResource(R.string.gacha_filters_title),
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                // r57：「刷新目录」从筛选面板状态行挪到标题行右上角（对齐模型参数页的刷新图标观感）
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.gacha_filters_title),
+                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    IconButton(
+                        onClick = { vm.refreshGachaCatalog() },
+                        enabled = vm.gachaMastersLoaded,
+                    ) {
+                        if (!vm.gachaMastersLoaded) {
+                            ContainedLoadingIndicator(Modifier.size(24.dp))
+                        } else {
+                            Icon(
+                                Lucide.RefreshCw,
+                                contentDescription = stringResource(R.string.gacha_refresh_catalog),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
                 AdvGachaFilterPanel(vm, s, onGoSettings = onOpenGachaSettings)
                 Spacer(Modifier.height(12.dp))
                 val close = LocalGlassDismiss.current
@@ -826,8 +855,31 @@ fun CustomScreen(
                 )
                 if (textToImage) {
                     AdvGachaSettings(vm, s, onAskEnable = { gachaGuide = true })
-                    Spacer(Modifier.height(12.dp))
                 }
+                // r51：「即时预览」开关从外观页挪到这里（生成页齿轮 → 更多设置），
+                // 默认关、存储键（live_preview）不变，只是换位置。无解释小字（界面文案规矩）。
+                // 与抽屉里其它卡同款节奏：每张卡前各留 12dp，卡间等距。
+                Spacer(Modifier.height(12.dp))
+                GlassCard {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(R.string.settings_live_preview),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ImmersiveInk,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(
+                            checked = s.livePreviewEnabled,
+                            onCheckedChange = { vm.setLivePreview(it) },
+                            colors = glassSwitchColors(),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
                 val showSizesHere = sizes.isNotEmpty()
                 val sizeTitleRes = if (showSizesHere) R.string.card_size_batch else R.string.card_count
                 GlassCard {
@@ -1026,6 +1078,7 @@ private fun ColumnScope.ImmersiveStage(
     onPickGallery: () -> Unit,
     onPickVideo: () -> Unit,
     onPickVideoGallery: () -> Unit,
+    chromeVisible: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
     val textRows = vm.textResults()
@@ -1045,9 +1098,13 @@ private fun ColumnScope.ImmersiveStage(
     CompositionLocalProvider(LocalOverPhoto provides true) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
         if (hasTop) {
+            // r55：顶部表单区（加载/文本结果/负向）随 chrome 藏显（r55.1 淡出+下滑）。
+            ChromeFade(
+                visible = chromeVisible,
+                modifier = Modifier.align(Alignment.TopCenter),
+            ) {
             Column(
                 Modifier
-                    .align(Alignment.TopCenter)
                     .fillMaxSize()
                     .padding(start = 12.dp, end = 12.dp, bottom = bottomReserve),
             ) {
@@ -1073,22 +1130,34 @@ private fun ColumnScope.ImmersiveStage(
                     }
                 }
             }
+            }
         }
         if (slots.isNotEmpty()) {
-            RefSlotRow(
-                slots = slots,
-                onAlbum = { slot -> if (slot.video) onPickVideo() else onPickImage() },
-                onGallery = { slot -> if (slot.video) onPickVideoGallery() else onPickGallery() },
-                onRemove = { slot -> if (slot.video) vm.clearVideo() else vm.clearSource() },
+            // r55：参考槽也是表单 chrome，随顶部一起藏显。
+            ChromeFade(
+                visible = chromeVisible,
                 modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 4.dp),
-            )
+            ) {
+                RefSlotRow(
+                    slots = slots,
+                    onAlbum = { slot -> if (slot.video) onPickVideo() else onPickImage() },
+                    onGallery = { slot -> if (slot.video) onPickVideoGallery() else onPickGallery() },
+                    onRemove = { slot -> if (slot.video) vm.clearVideo() else vm.clearSource() },
+                )
+            }
         }
         if (media.isNotEmpty()) {
-            AssetStack(
-                images = media,
-                onGallery = onGallery,
+            // r55.1：图库卡片也是浮层 chrome，随整体藏显——此前保留它，底栏藏掉后舞台变高，
+            // 卡片对齐点跟着沉到屏底看起来「瞬移」；现在随 chrome 一起坠走，预览全屏无遮挡。
+            ChromeFade(
+                visible = chromeVisible,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 4.dp),
-            )
+            ) {
+                AssetStack(
+                    images = media,
+                    onGallery = onGallery,
+                )
+            }
         }
         // r29.3：生成中不再在画面中央放占位方块——底部胶囊已经有进度/排队状态，这里留空更干净。
         }
@@ -1157,7 +1226,7 @@ private fun RefSlot(
             Modifier
                 .size(76.dp)
                 .clip(shape)
-                .immersiveGlass()
+                .immersiveGlass(shape = shape)
                 .border(1.dp, ImmersiveHairline, shape)
                 .clickable { if (slot.filled) viewing = true else choosing = true },
             contentAlignment = Alignment.Center,

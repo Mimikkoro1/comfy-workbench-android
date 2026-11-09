@@ -93,6 +93,7 @@
     <string name="settings_amoled_desc">Pure black background in dark mode</string>
     <string name="settings_blur">Blur</string>
     <string name="settings_blur_desc">Frosted top and bottom bars. Below Android 12, a translucent bar is used.</string>
+    <string name="settings_live_preview">Live preview</string>
     <string name="settings_notifications">Notifications</string>
     <string name="settings_notify_done">Generation complete</string>
     <string name="field_user">Username</string>
@@ -513,6 +514,7 @@
     <string name="gacha_pool_casual">Casual</string>
     <string name="gacha_pool_lingerie">Loungewear</string>
     <string name="gacha_pool_gongsu">Gongsu</string>
+    <string name="gacha_refresh_catalog">Refresh catalog</string>
     <string name="gacha_pose">Pose</string>
     <string name="gacha_pose_any">Any</string>
     <string name="gacha_pose_standing">Standing</string>

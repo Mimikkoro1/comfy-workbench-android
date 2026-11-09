@@ -250,6 +250,46 @@ class AdvGachaParseTest {
         assertEquals("", gongsu.labelEn)
     }
 
+    // ---- r56：服端加池（taozhuang）刷新即见；旧服不再假装有写死四池 ----
+
+    @Test
+    fun catalogParsesTaozhuangPoolAndKeepsSelection() {
+        val root = JSONObject()
+            .put("masters", JSONArray().put(JSONObject().put("id", "k").put("name", "K")))
+            .put(
+                "options",
+                JSONObject()
+                    .put("modes", JSONArray().put(option("wallpaper", "壁纸")))
+                    .put("outfits", JSONArray().put(option("random", "随机")))
+                    .put("poses", JSONArray())
+                    .put(
+                        "pools",
+                        JSONArray()
+                            .put(option("auto", "自动"))
+                            .put(
+                                JSONObject()
+                                    .put("id", "taozhuang")
+                                    .put("label", "套装")
+                                    .put("label_en", "Outfit Set"),
+                            ),
+                    ),
+            )
+        val catalog = parseCatalog(root)
+        val options = catalog.options
+        assertTrue(options != null)
+        assertEquals(listOf("auto", "taozhuang"), options!!.pools.map { it.id })
+        val tao = options.pools.first { it.id == "taozhuang" }
+        assertEquals("套装", tao.label)
+        assertEquals("Outfit Set", tao.labelEn)
+        // 已选中 taozhuang 的选择经目录校正后原样保留，draw 才能把 pool=taozhuang 传给服端
+        val kept = correctGachaSelection(
+            GachaSelection("wallpaper", "", "random", "", "taozhuang"),
+            catalog.masters,
+            options,
+        )
+        assertEquals("taozhuang", kept.pool)
+    }
+
     // ---- r39：服务端错误文本与连接失败分类 ----
 
     @Test
